@@ -60,7 +60,7 @@ pip install -r requirements.txt
 
 3. Run the setup wizard:
 ```bash
-python main.py --setup
+./silentgem.py --setup
 ```
 
 The setup wizard will guide you through:
@@ -73,7 +73,7 @@ The setup wizard will guide you through:
 
 Start the translation service:
 ```bash
-python main.py
+./silentgem.py
 ```
 
 ### Command-line options

@@ -109,9 +109,9 @@ class SilentGemClient:
         except sqlite3.ProgrammingError as e:
             if "Cannot operate on a closed database" in str(e):
                 logger.error("Database connection closed unexpectedly. Please restart the application.")
-                logger.error("You can run 'python main.py --cleanup' to fix database issues.")
+                logger.error("You can run 'python silentgem.py --cleanup' to fix database issues.")
                 print("\n❌ Database error: Connection closed unexpectedly")
-                print("Please run 'python main.py --cleanup' to fix this issue")
+                print("Please run 'python silentgem.py --cleanup' to fix this issue")
                 # Signal shutdown 
                 if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
                     self._shutdown_future.set_result(None)
@@ -121,9 +121,9 @@ class SilentGemClient:
             error_message = str(e).lower()
             if "migrate" in error_message or "phone_migrate" in error_message:
                 logger.error(f"Telegram datacenter migration required: {e}")
-                logger.error("Please run 'python main.py --cleanup' and then restart the application")
+                logger.error("Please run 'python silentgem.py --cleanup' and then restart the application")
                 print(f"\n❌ Telegram error: {e}")
-                print("Please run 'python main.py --cleanup' and then restart")
+                print("Please run 'python silentgem.py --cleanup' and then restart")
                 if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
                     self._shutdown_future.set_result(None)
             elif "flood" in error_message:

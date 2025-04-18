@@ -85,7 +85,7 @@ async def setup_wizard():
         print("\n❌ Failed to create .env file.")
         return False
         
-    print("\n🎉 Setup complete! You can now run SilentGem with: python main.py")
+    print("\n🎉 Setup complete! You can now run SilentGem with: python silentgem.py")
     return True
 
 async def save_env_file(api_id, api_hash, gemini_key, session_name, target_language):

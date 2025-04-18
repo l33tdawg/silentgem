@@ -101,7 +101,7 @@ def check_and_fix_database_lock():
             return True
         else:
             print("Lock files not cleared. You may experience 'database is locked' errors.")
-            print("If you do, run the application with the --cleanup flag: python main.py --cleanup")
+            print("If you do, run the application with the --cleanup flag: ./silentgem.py --cleanup")
             return False
     
     return False
@@ -301,7 +301,7 @@ async def list_mappings():
         print("⚠️ No authentication session file found! You'll need to authenticate when starting the service.")
     elif session_lock_files:
         print(f"⚠️ Found {len(session_lock_files)} database lock files. This may cause connection issues.")
-        print("   Run 'python main.py --cleanup' and choose option 2 to fix this.")
+        print("   Run './silentgem.py --cleanup' and choose option 2 to fix this.")
     else:
         print("✅ Session file looks good. You should be able to start the service without re-authentication.")
     
@@ -948,13 +948,13 @@ async def start_service():
                 raise
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e):
-                    print("\n❌ Error: Database is locked. Please run 'python main.py --cleanup' to fix this issue.")
-                    force_exit("\nExit and run 'python main.py --cleanup'")
+                    print("\n❌ Error: Database is locked. Please run './silentgem.py --cleanup' to fix this issue.")
+                    force_exit("\nExit and run './silentgem.py --cleanup'")
                 raise
             except sqlite3.ProgrammingError as e:
                 if "Cannot operate on a closed database" in str(e):
-                    print("\n❌ Error: Database connection closed. Please run 'python main.py --cleanup' to fix this issue.")
-                    force_exit("\nExit and run 'python main.py --cleanup'")
+                    print("\n❌ Error: Database connection closed. Please run './silentgem.py --cleanup' to fix this issue.")
+                    force_exit("\nExit and run './silentgem.py --cleanup'")
                 raise
             except MemoryError:
                 print("\nMemory allocation error detected. Emergency shutdown.")
@@ -974,11 +974,11 @@ async def start_service():
             print("\nKeyboard interrupt detected...")
         except sqlite3.OperationalError as e:
             if "database is locked" in str(e):
-                print("\n❌ Error: Database is locked. Please run 'python main.py --cleanup' to fix this issue.")
+                print("\n❌ Error: Database is locked. Please run './silentgem.py --cleanup' to fix this issue.")
             logger.error(f"Database error: {e}")
         except sqlite3.ProgrammingError as e:
             if "Cannot operate on a closed database" in str(e):
-                print("\n❌ Error: Database connection closed. Please run 'python main.py --cleanup' to fix this issue.")
+                print("\n❌ Error: Database connection closed. Please run './silentgem.py --cleanup' to fix this issue.")
             logger.error(f"Database error: {e}")
         except MemoryError:
             print("\nMemory error detected during service run.")
@@ -987,7 +987,7 @@ async def start_service():
             logger.error(f"Error running SilentGem: {e}")
     except sqlite3.OperationalError as e:
         if "database is locked" in str(e):
-            print("\n❌ Error: Database is locked. Please run 'python main.py --cleanup' to fix this issue.")
+            print("\n❌ Error: Database is locked. Please run './silentgem.py --cleanup' to fix this issue.")
         logger.error(f"Database error during startup: {e}")
     except Exception as e:
         logger.error(f"Error starting service: {e}")

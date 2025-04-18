@@ -15,7 +15,7 @@ This guide covers different ways to deploy SilentGem on various platforms.
 2. Install dependencies: `pip install -r requirements.txt`
 3. Copy `.env.example` to `.env` and fill in your API credentials
 4. Copy `data/mapping.json.example` to `data/mapping.json` and configure your chat mappings
-5. Run the bot: `python main.py`
+5. Run the bot: `python silentgem.py`
 
 ## Server Deployment
 
@@ -38,7 +38,7 @@ After=network.target
 Type=simple
 User=yourusername
 WorkingDirectory=/path/to/silentgem
-ExecStart=/usr/bin/python3 /path/to/silentgem/main.py
+ExecStart=/usr/bin/python3 /path/to/silentgem/silentgem.py
 Restart=on-failure
 RestartSec=10
 
@@ -68,7 +68,7 @@ primary_region = "lax"
   PORT = "8080"
 
 [processes]
-  app = "python main.py"
+  app = "python silentgem.py"
 
 [mounts]
   source = "silentgem_data"
@@ -119,12 +119,12 @@ pip install -r requirements.txt
 6. Configure your `.env` and `mapping.json` files
 7. Run the bot:
 ```
-python main.py
+python silentgem.py
 ```
 
 8. To keep it running in the background when you close Termux:
 ```
-nohup python main.py > logs/output.log 2>&1 &
+nohup python silentgem.py > logs/output.log 2>&1 &
 ```
 
 ## Maintaining Your Deployment
