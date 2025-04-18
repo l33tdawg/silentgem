@@ -57,6 +57,7 @@ class GeminiTranslator:
             str: Translated text
         """
         if not text or text.isspace():
+            print("⚠️ Empty text received for translation, returning empty string")
             return ""
         
         try:
@@ -64,24 +65,79 @@ class GeminiTranslator:
             print(f"📝 Processing text: {len(text)} characters, {len(text.split())} words")
             print(f"📌 Text sample: {text[:100]}...")
             
+            # Log target language
+            print(f"🌐 Target language: {TARGET_LANGUAGE}")
+            
             # Construct the prompt
             prompt = self._build_prompt(text, source_language)
             print(f"🔍 Using prompt length: {len(prompt)} characters")
+            print(f"🔍 Prompt sample: {prompt[:150]}...")
             
             # Get response from Gemini
             print("🧠 Sending to Google Gemini for translation...")
+            print(f"ℹ️ Model being used: {self.model_name}")
             print(f"⏳ Awaiting response from Gemini API...")
             
             try:
-                response = await self.model.generate_content_async(prompt)
+                # Print verbose information about the model and request
+                print(f"📡 API request details:")
+                print(f"  - Model: {self.model_name}")
+                print(f"  - Temperature: 0.1")
+                print(f"  - Max tokens: 8192")
+                
+                # For more reliable results, use generation config
+                response = await self.model.generate_content_async(
+                    prompt,
+                    generation_config={
+                        'temperature': 0.1,  # Low temperature for accurate translations
+                        'top_p': 0.95,
+                        'top_k': 40,
+                        'max_output_tokens': 8192,  # Allow for longer translations
+                    }
+                )
                 print(f"✅ Received response from Gemini API")
+                
+                # Log response details
+                print(f"📡 Response details:")
+                print(f"  - Has text attribute: {hasattr(response, 'text')}")
+                print(f"  - Response type: {type(response)}")
+                
+                if not response or not hasattr(response, 'text'):
+                    print(f"❌ Response has no text attribute: {response}")
+                    raise ValueError("Empty or invalid response from Gemini API")
+                
+                # Print the raw response for debugging
+                print(f"📡 Raw response text: {response.text[:150]}...")
+                    
             except Exception as e:
                 print(f"❌ Gemini API error: {e}")
-                raise
+                print(f"❌ Error type: {type(e).__name__}")
+                logger.error(f"Gemini API error: {e}")
+                
+                # Try once more with a simpler prompt as fallback
+                try:
+                    print("🔄 Trying simplified fallback prompt...")
+                    fallback_prompt = f"Translate this text to {TARGET_LANGUAGE}:\n\n{text}"
+                    print(f"🔄 Fallback prompt: {fallback_prompt[:150]}...")
+                    response = await self.model.generate_content_async(fallback_prompt)
+                    print(f"✅ Received response from fallback prompt")
+                except Exception as fallback_error:
+                    print(f"❌ Fallback translation also failed: {fallback_error}")
+                    print(f"❌ Fallback error type: {type(fallback_error).__name__}")
+                    raise
             
             # Extract and return the translation
             translated_text = response.text.strip()
             
+            if not translated_text:
+                print("❌ Empty translation received")
+                raise ValueError("Empty translation received from Gemini API")
+            
+            # Check if the response is actually a translation or just an error message
+            if len(translated_text) < 5 and len(text) > 20:
+                print(f"❌ Suspiciously short translation: '{translated_text}'")
+                raise ValueError("Suspiciously short translation received")
+                
             # Determine source language from response if possible
             source_lang_detected = None
             if hasattr(response, 'prompt_feedback') and hasattr(response.prompt_feedback, 'block_reason_all'):
@@ -104,7 +160,9 @@ class GeminiTranslator:
             print(f"❌ Translation error: {e}")
             print(f"❌ Error details: {type(e).__name__}")
             import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
+            error_trace = traceback.format_exc()
+            print(f"❌ Traceback: {error_trace}")
+            logger.error(f"Translation error traceback: {error_trace}")
             return f"[Translation Error: {str(e)}]"
     
     def _build_prompt(self, text, source_language=None):
@@ -120,21 +178,25 @@ class GeminiTranslator:
         """
         if source_language:
             prompt = f"""
-            Please translate the following text from {source_language} to {TARGET_LANGUAGE}.
+            You are a professional translator. Translate the following text from {source_language} to {TARGET_LANGUAGE}.
             Maintain the original formatting, tone, and meaning as closely as possible.
-            Only provide the translation, with no additional comments or explanations.
+            Only provide the translated text, with no additional comments, explanations, or disclaimers.
             
             TEXT TO TRANSLATE:
             {text}
+            
+            TRANSLATION IN {TARGET_LANGUAGE}:
             """
         else:
             prompt = f"""
-            Please identify the language of the following text and translate it to {TARGET_LANGUAGE}.
+            You are a professional translator. Identify the language of the following text and translate it to {TARGET_LANGUAGE}.
             Maintain the original formatting, tone, and meaning as closely as possible.
-            Only provide the translation, with no additional comments or explanations.
+            Only provide the translated text, with no additional comments, explanations, or disclaimers.
             
             TEXT TO TRANSLATE:
             {text}
+            
+            TRANSLATION IN {TARGET_LANGUAGE}:
             """
         
         return prompt.strip() 

@@ -128,9 +128,50 @@ def signal_handler(sig, frame):
     if hasattr(signal_handler, 'force_exit_count'):
         signal_handler.force_exit_count += 1
         if signal_handler.force_exit_count >= 2:
-            force_exit("Forcing immediate exit after multiple interrupts.")
+            print("\nForcing immediate exit. Any unsaved data may be lost.")
+            os._exit(1)  # Force exit on second Ctrl+C
     else:
         signal_handler.force_exit_count = 1
+        
+    # Return to menu if we're in a stuck state after 5 seconds
+    if not hasattr(signal_handler, 'exit_timer_started'):
+        signal_handler.exit_timer_started = True
+        # Schedule a forced return to menu
+        if hasattr(asyncio, 'get_running_loop'):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_later(5, force_menu_return)
+            except RuntimeError:
+                # No running event loop
+                pass
+
+# Force return to menu
+def force_menu_return():
+    """Force a return to menu if we're stuck in shutdown"""
+    if signal_handler.shutdown_requested and signal_handler.exit_timer_started:
+        print("\n⚠️ Shutdown is taking too long. Forcing return to menu...")
+        
+        # Reset the signal handler state
+        signal_handler.shutdown_requested = False
+        signal_handler.exit_timer_started = False
+        signal_handler.force_exit_count = 0
+        
+        # Try to find any active clients and kill them
+        for app in list(active_clients):
+            try:
+                if hasattr(app, '_shutdown_flag'):
+                    setattr(app, '_shutdown_flag', True)
+                    print(f"Marked client {id(app)} for shutdown")
+                    
+                # Remove from active clients list
+                active_clients.remove(app)
+            except Exception as e:
+                print(f"Error forcibly stopping client: {e}")
+        
+        # Clear all active clients list
+        active_clients.clear()
+        
+        print("All clients forcibly stopped. Press Enter to continue.")
 
 # Initialize the shutdown flag
 signal_handler.shutdown_requested = False
@@ -925,9 +966,20 @@ async def start_service():
     # Reset shutdown flags
     signal_handler.shutdown_requested = False
     signal_handler.force_exit_count = 0
+    if hasattr(signal_handler, 'exit_timer_started'):
+        signal_handler.exit_timer_started = False
+    
+    # Clear any lingering interrupts
+    try:
+        # Clear any pending KeyboardInterrupt by briefly sleeping and catching it
+        await asyncio.sleep(0.1)
+    except KeyboardInterrupt:
+        pass  # Clear any pending interrupts
     
     # Set up client
     client = None
+    task = None
+    
     try:
         client = SilentGemClient()
         
@@ -937,11 +989,12 @@ async def start_service():
                 await client.start()
                 print("\nService started successfully. Monitoring chats for messages to translate.")
                 
-                while True:
-                    # Check for shutdown request
-                    if signal_handler.shutdown_requested:
-                        break
-                    await asyncio.sleep(0.1)
+                # Wait for shutdown signal
+                while not signal_handler.shutdown_requested:
+                    await asyncio.sleep(0.5)
+                
+                print("\nShutdown requested. Stopping service...")
+                return
             except asyncio.CancelledError:
                 # This is expected when we cancel the task
                 logger.info("Service task cancelled")
@@ -960,66 +1013,80 @@ async def start_service():
                 print("\nMemory allocation error detected. Emergency shutdown.")
                 force_exit("Forcing exit due to memory constraints.")
         
-        # Create and start the task
-        task = None
+        # Create and start the task with proper exception handling
         try:
             # Start the task
             task = asyncio.create_task(run_forever())
             
-            # Wait for the task to complete (should only happen if cancelled or if there's an error)
-            await task
-        except asyncio.CancelledError:
-            print("\nService cancellation requested...")
+            # Wait for the task to complete or keyboard interrupt
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # Expected when cancelling
         except KeyboardInterrupt:
-            print("\nKeyboard interrupt detected...")
-        except sqlite3.OperationalError as e:
-            if "database is locked" in str(e):
-                print("\n❌ Error: Database is locked. Please run './silentgem.py --cleanup' to fix this issue.")
-            logger.error(f"Database error: {e}")
-        except sqlite3.ProgrammingError as e:
-            if "Cannot operate on a closed database" in str(e):
-                print("\n❌ Error: Database connection closed. Please run './silentgem.py --cleanup' to fix this issue.")
-            logger.error(f"Database error: {e}")
-        except MemoryError:
-            print("\nMemory error detected during service run.")
-            force_exit("Forcing exit due to memory constraints.")
-        except Exception as e:
-            logger.error(f"Error running SilentGem: {e}")
-    except sqlite3.OperationalError as e:
-        if "database is locked" in str(e):
-            print("\n❌ Error: Database is locked. Please run './silentgem.py --cleanup' to fix this issue.")
-        logger.error(f"Database error during startup: {e}")
+            print("\nKeyboard interrupt detected. Starting shutdown process...")
+            signal_handler.shutdown_requested = True
+            
+            # Give shutdown process some time to work
+            try:
+                if task and not task.done():
+                    await asyncio.wait_for(task, timeout=3)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                pass  # Expected exceptions during shutdown
+        
     except Exception as e:
-        logger.error(f"Error starting service: {e}")
+        logger.error(f"Error in service: {e}")
+        print(f"\n❌ Error: {e}")
     finally:
-        # Clean up
+        # Ensure cleanup happens
+        cleanup_success = True
+        
+        # Clean up the task
         if task and not task.done():
             logger.info("Cancelling running task...")
             try:
                 task.cancel()
-                # Wait for the task to be cancelled (with timeout)
-                await asyncio.wait_for(task, timeout=2)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                # This is expected
-                pass
-            except MemoryError:
-                force_exit("Forcing exit due to memory constraints during cleanup.")
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+            except (asyncio.TimeoutError, asyncio.CancelledError, MemoryError):
+                cleanup_success = False
             except Exception as e:
                 logger.error(f"Error during task cancellation: {e}")
+                cleanup_success = False
         
         # Stop the client
         if client:
             try:
-                await client.stop()
-            except MemoryError:
-                force_exit("Forcing exit due to memory constraints during client shutdown.")
+                await asyncio.wait_for(client.stop(), timeout=3)
+            except (asyncio.TimeoutError, asyncio.CancelledError, MemoryError):
+                cleanup_success = False
             except Exception as e:
                 logger.error(f"Error stopping client: {e}")
+                cleanup_success = False
         
-        print("\nService stopped. Returning to menu...")
+        # Reset shutdown flags
+        signal_handler.shutdown_requested = False
+        if hasattr(signal_handler, 'exit_timer_started'):
+            signal_handler.exit_timer_started = False
+        signal_handler.force_exit_count = 0
+        
+        print("\nService stopped.")
+        if cleanup_success:
+            print("Service was shut down properly.")
+        else:
+            print("Service shutdown had some issues, but we've returned to the menu.")
+        
+        print("Returning to menu...")
+        # Small pause to allow UI to update
+        await asyncio.sleep(0.5)
 
 async def display_menu():
     """Display the interactive menu"""
+    # Reset signal handler state before showing menu
+    signal_handler.shutdown_requested = False
+    signal_handler.force_exit_count = 0
+    if hasattr(signal_handler, 'exit_timer_started'):
+        signal_handler.exit_timer_started = False
+        
     print("\n==== SilentGem Main Menu ====")
     print("1. Start Translation Service")
     print("2. List Current Mappings")

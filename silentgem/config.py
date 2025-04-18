@@ -38,6 +38,13 @@ logger.add(
 )
 logger.add(lambda msg: print(msg), level=LOG_LEVEL)
 
+def ensure_dir_exists(directory):
+    """Ensure a directory exists, creating it if necessary."""
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+        logger.debug(f"Created directory: {directory}")
+    return directory
+
 def validate_config():
     """Validate that all required configuration is present."""
     if API_ID == 0:

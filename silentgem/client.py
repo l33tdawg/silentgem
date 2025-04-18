@@ -10,6 +10,7 @@ import sqlite3
 
 from silentgem.config import API_ID, API_HASH, SESSION_NAME, load_mapping, TARGET_LANGUAGE
 from silentgem.translator import GeminiTranslator
+from silentgem.mapper import ChatMapper
 
 class SilentGemClient:
     """Telegram userbot client for monitoring and translating messages"""
@@ -34,14 +35,20 @@ class SilentGemClient:
             import traceback
             print(f"❌ Traceback: {traceback.format_exc()}")
             raise
-            
+        
+        # Initialize chat mapper for state tracking
+        self.mapper = ChatMapper()
         self.chat_mapping = {}
+        
+        # Store tasks to properly cancel them during shutdown
+        self._tasks = {}
+        
         logger.info("SilentGem client initialized")
     
     async def start(self):
         """Start the client and register handlers"""
         # Load the chat mapping
-        self.chat_mapping = load_mapping()
+        self.chat_mapping = self.mapper.get_all()
         if not self.chat_mapping:
             logger.warning("No chat mappings loaded, the bot won't translate any messages")
             print("\n⚠️ WARNING: No chat mappings found. The translator won't process any messages.")
@@ -67,42 +74,48 @@ class SilentGemClient:
             print(f"\n✅ Connected to Telegram as {me.first_name} ({me.id})")
             print("Waiting for messages to translate... (Press Ctrl+C to stop)")
             
-            # Add a debug message handler that will catch ALL messages, not just from mapped chats
-            @self.client.on_message()
-            async def debug_all_messages(client, message):
+            # Start heartbeat to show the client is alive
+            self._tasks['heartbeat'] = asyncio.create_task(self._heartbeat())
+            
+            # Convert chat mapping keys to integers if they're stored as strings
+            chat_ids_to_monitor = []
+            for chat_id in self.chat_mapping.keys():
                 try:
-                    chat_id = str(message.chat.id)
-                    chat_title = message.chat.title if hasattr(message.chat, 'title') else 'Private'
-                    print(f"\n🔍 DEBUG: Received message in chat {chat_id} ({chat_title})")
-                    print(f"💬 Message content: {message.text or message.caption or '[No text content]'}")
-                    print(f"🔗 Available mappings: {self.chat_mapping}")
+                    # Try to convert to int if it's a string
+                    chat_ids_to_monitor.append(int(chat_id))
+                    print(f"✅ Added chat ID {chat_id} to monitoring list")
+                except ValueError:
+                    print(f"⚠️ Warning: Invalid chat ID format: {chat_id}")
                     
-                    # Check if this chat is in our mapping
-                    if chat_id in self.chat_mapping:
-                        print(f"✅ This chat is in our mapping! Will process for translation.")
-                        print(f"🔄 Will translate to target chat: {self.chat_mapping[chat_id]}")
-                        
-                        # Force process message here to ensure it gets translated
-                        print(f"🔄 Manually triggering message processing...")
+            if not chat_ids_to_monitor:
+                print("⚠️ Warning: No valid chat IDs to monitor")
+            else:
+                print(f"✅ Monitoring {len(chat_ids_to_monitor)} chats: {chat_ids_to_monitor}")
+            
+            # Register targeted message handler with verbose logging
+            @self.client.on_message(filters.chat(chat_ids_to_monitor))
+            async def on_message(client, message):
+                try:
+                    print(f"\n📩 Received message from chat {message.chat.id} ({message.chat.title if hasattr(message.chat, 'title') else 'Private'})")
+                    print(f"💬 Message content: {message.text or message.caption or '[No text content]'}")
+                    print(f"🔗 Chat mapping for this chat: {self.chat_mapping.get(str(message.chat.id), 'Not found')}")
+                    
+                    if str(message.chat.id) in self.chat_mapping:
+                        print(f"✅ Found chat ID {message.chat.id} in mappings, processing message")
                         await self._handle_message(message)
                     else:
-                        print(f"❌ This chat is NOT in our mapping. Message will be ignored.")
-                        print(f"🔍 Chat ID: '{chat_id}' not found in keys: {list(self.chat_mapping.keys())}")
+                        print(f"⚠️ Chat ID {message.chat.id} not found in mappings, this message should have been filtered out")
                 except Exception as e:
-                    print(f"❌ Error in debug message handler: {e}")
+                    print(f"❌ Error in message handler: {e}")
+                    logger.error(f"Error in message handler: {e}")
                     import traceback
                     print(f"❌ Traceback: {traceback.format_exc()}")
             
-            # Register targeted message handler with verbose logging
-            @self.client.on_message(filters.chat(list(self.chat_mapping.keys())))
-            async def on_message(client, message):
-                print(f"\n📩 Received message from chat {message.chat.id} ({message.chat.title if hasattr(message.chat, 'title') else 'Private'})")
-                print(f"💬 Message content: {message.text or message.caption or '[No text content]'}")
-                print(f"🔗 Chat mapping for this chat: {self.chat_mapping.get(str(message.chat.id), 'Not found')}")
-                await self._handle_message(message)
+            # Start syncing missed messages
+            self._tasks['sync'] = asyncio.create_task(self._sync_missed_messages())
             
-            # Start periodic message checking for debugging
-            asyncio.create_task(self._debug_check_messages())
+            # Add active message polling as a fallback to event handlers
+            self._tasks['polling'] = asyncio.create_task(self._active_message_polling())
             
             # Keep the client running
             await self._idle()
@@ -148,17 +161,29 @@ class SilentGemClient:
     async def _handle_message(self, message):
         """Handle incoming messages from monitored chats"""
         try:
+            # Ensure chat_id is a string for consistent lookup
             chat_id = str(message.chat.id)
             logger.debug(f"Received message in chat {chat_id}: {message.text[:50] if message.text else ''}")
             print(f"🔄 Processing message from chat {chat_id}")
             
-            # Check if this chat is in our mapping
-            if chat_id not in self.chat_mapping:
+            # Debug mapping keys for troubleshooting
+            print(f"🔍 Available mapping keys: {list(self.chat_mapping.keys())}")
+            print(f"🔍 Chat ID type: {type(chat_id)}, Value: {chat_id}")
+            
+            # Check if this chat is in our mapping - try both string and int formats
+            if chat_id in self.chat_mapping:
+                target_chat_id = self.chat_mapping[chat_id]
+                print(f"✅ Found target using string key: {target_chat_id}")
+            elif chat_id.lstrip('-').isdigit() and str(int(chat_id)) in self.chat_mapping:
+                # Try with normalized integer conversion
+                target_chat_id = self.chat_mapping[str(int(chat_id))]
+                print(f"✅ Found target using normalized integer key: {target_chat_id}")
+            else:
                 logger.debug(f"Chat {chat_id} not in mapping, ignoring")
                 print(f"❌ Chat {chat_id} not in mapping, ignoring")
+                print(f"❌ Available keys: {list(self.chat_mapping.keys())}")
                 return
             
-            target_chat_id = self.chat_mapping[chat_id]
             logger.info(f"Processing message from {chat_id} to {target_chat_id}")
             print(f"✅ Found target chat {target_chat_id} for source chat {chat_id}")
             
@@ -409,6 +434,10 @@ class SilentGemClient:
                 logger.error(f"Failed to send message to {target_chat_id}: {e}")
                 print(f"❌ Failed to send message to {target_chat_id}: {e}")
         
+            # Update message ID in state tracker after successful processing
+            self.mapper.update_last_message_id(chat_id, message.id)
+            print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
+        
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             print(f"❌ Error handling message: {e}")
@@ -428,64 +457,188 @@ class SilentGemClient:
     async def stop(self):
         """Stop the client gracefully"""
         logger.info("Stopping SilentGem client...")
+        print("\n🛑 Stopping translation service...")
         
+        # Mark that we're stopping
+        self._running = False
+        
+        # Cancel all background tasks
+        if hasattr(self, '_tasks'):
+            for name, task in list(self._tasks.items()):
+                if not task.done():
+                    try:
+                        print(f"🛑 Stopping {name} task...")
+                        task.cancel()
+                        try:
+                            await asyncio.wait_for(task, timeout=1)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            pass  # Expected during cancellation
+                    except Exception as e:
+                        print(f"⚠️ Error cancelling {name} task: {e}")
+            
+            self._tasks.clear()
+            print("✅ All background tasks stopped")
+        
+        # Signal main loop to stop
         if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
+            print("🛑 Signaling main loop to stop...")
             self._shutdown_future.set_result(None)
         
+        # Stop the Telegram client
         try:
             if hasattr(self, 'client') and self.client.is_connected:
-                await asyncio.wait_for(self.client.stop(), timeout=5)
+                print("🛑 Stopping Telegram client connection...")
+                await asyncio.wait_for(self.client.stop(), timeout=3)
                 logger.info("Client stopped successfully")
+                print("✅ Telegram client disconnected")
             else:
                 logger.info("Client was not running or already stopped")
+                print("ℹ️ Telegram client was already disconnected")
         except asyncio.TimeoutError:
             logger.warning("Client stop operation timed out, proceeding anyway")
+            print("⚠️ Telegram client disconnect timed out, but we'll continue")
         except Exception as e:
             logger.error(f"Error stopping client: {e}")
+            print(f"⚠️ Error disconnecting Telegram: {e}")
         
-        self._running = False 
-
-    async def _debug_check_messages(self):
-        """Periodically check for messages in monitored chats for debugging purposes"""
+        print("✅ Translation service stopped")
+    
+    async def _heartbeat(self):
+        """Periodically log a heartbeat to show the client is still running"""
         try:
-            # Wait for 10 seconds before starting checks to allow everything to initialize
-            await asyncio.sleep(10)
-            
-            print("\n🔍 Starting periodic message checking for debugging purposes...")
-            
-            check_count = 0
+            count = 0
             while hasattr(self, '_running') and self._running:
-                check_count += 1
-                try:
-                    print(f"\n🔍 Debug check #{check_count}: Verifying chat access...")
-                    
-                    for source_id in self.chat_mapping.keys():
-                        try:
-                            # Try to get info about the chat
-                            chat = await self.client.get_chat(source_id)
-                            print(f"✅ Successfully accessed chat: {chat.title} (ID: {chat.id})")
-                            
-                            # Try to get the last 5 messages
-                            print(f"🔍 Fetching last 5 messages from chat {chat.id}...")
-                            messages = []
-                            async for msg in self.client.get_chat_history(chat.id, limit=5):
-                                messages.append(msg)
-                            
-                            if messages:
-                                print(f"✅ Found {len(messages)} recent messages in chat {chat.id}")
-                                for msg in messages:
-                                    print(f"  - Message ID: {msg.id}, Date: {msg.date}")
-                            else:
-                                print(f"❌ No recent messages found in chat {chat.id}")
-                        except Exception as e:
-                            print(f"❌ Error accessing chat {source_id}: {e}")
-                    
-                except Exception as e:
-                    print(f"❌ Error during debug check: {e}")
+                await asyncio.sleep(60)  # Every minute
+                count += 1
+                print(f"\n💓 Heartbeat #{count}: SilentGem is running and listening for messages")
                 
-                # Wait 30 seconds before checking again
-                await asyncio.sleep(30)
+                # Every 5 minutes, print chat mappings to verify they're still correct
+                if count % 5 == 0:
+                    print(f"🔄 Active chat mappings ({len(self.chat_mapping)}):")
+                    for source_id, target_id in self.chat_mapping.items():
+                        print(f" - Source: {source_id} → Target: {target_id}")
+                    
+                    # Also verify we can access one of the source chats (take the first one)
+                    if self.chat_mapping:
+                        try:
+                            first_source = list(self.chat_mapping.keys())[0]
+                            chat = await self.client.get_chat(first_source)
+                            print(f"✅ Successfully verified access to chat: {chat.title} (ID: {chat.id})")
+                        except Exception as e:
+                            print(f"⚠️ Warning: Could not access source chat {first_source}: {e}")
         except asyncio.CancelledError:
-            print("🔍 Debug message checking stopped")
+            print("💓 Heartbeat stopped")
         except Exception as e:
-            print(f"❌ Error in debug message checking: {e}") 
+            print(f"❌ Error in heartbeat: {e}")
+            
+    async def _sync_missed_messages(self):
+        """Sync any messages that might have been missed while offline"""
+        try:
+            # Wait a moment to let everything initialize
+            await asyncio.sleep(15)
+            
+            print("\n🔄 Checking for missed messages since last run...")
+            
+            for source_id in self.chat_mapping.keys():
+                try:
+                    # Get the last processed message ID for this chat
+                    last_message_id = self.mapper.get_last_message_id(source_id)
+                    
+                    if last_message_id > 0:
+                        print(f"🔍 Last processed message ID for chat {source_id}: {last_message_id}")
+                        
+                        # Get messages newer than the last processed ID
+                        missed_messages = []
+                        async for msg in self.client.get_chat_history(source_id, limit=20):
+                            if msg.id > last_message_id:
+                                missed_messages.append(msg)
+                            else:
+                                break  # No need to check older messages
+                        
+                        missed_messages.reverse()  # Process oldest first
+                        
+                        if missed_messages:
+                            print(f"🔄 Found {len(missed_messages)} missed messages to process in chat {source_id}")
+                            
+                            for idx, msg in enumerate(missed_messages):
+                                print(f"🔄 Processing missed message {idx+1}/{len(missed_messages)} (ID: {msg.id})")
+                                await self._handle_message(msg)
+                        else:
+                            print(f"✅ No missed messages in chat {source_id}")
+                    else:
+                        print(f"ℹ️ No previous message state for chat {source_id}, starting fresh")
+                        
+                        # Just mark the latest message as processed so we don't translate old history
+                        messages = []
+                        async for msg in self.client.get_chat_history(source_id, limit=1):
+                            messages.append(msg)
+                        
+                        if messages:
+                            latest_id = messages[0].id
+                            self.mapper.update_last_message_id(source_id, latest_id)
+                            print(f"✅ Initialized message tracking at ID {latest_id} for chat {source_id}")
+                        else:
+                            print(f"ℹ️ No messages found in chat {source_id}")
+                            
+                except Exception as e:
+                    print(f"❌ Error syncing messages for chat {source_id}: {e}")
+                    logger.error(f"Error syncing messages for chat {source_id}: {e}")
+            
+            print("✅ Message sync complete")
+            
+        except asyncio.CancelledError:
+            print("🔄 Message sync cancelled")
+            raise
+        except Exception as e:
+            print(f"❌ Error in message sync: {e}")
+            logger.error(f"Error in message sync: {e}")
+
+    async def _active_message_polling(self):
+        """Actively poll for new messages in case event handlers aren't working"""
+        try:
+            # Wait a moment to let everything initialize
+            await asyncio.sleep(20)  # Wait longer to ensure sync completes first
+            
+            print("\n🔄 Starting active message polling as a fallback mechanism...")
+            
+            # Now continuously poll for new messages, using the message state tracker
+            poll_count = 0
+            while hasattr(self, '_running') and self._running:
+                poll_count += 1
+                if poll_count % 10 == 0:  # Only log every 10 polls to reduce spam
+                    print(f"\n🔄 Active polling cycle #{poll_count}")
+                
+                for source_id in self.chat_mapping.keys():
+                    try:
+                        # Get the last processed message ID
+                        last_message_id = self.mapper.get_last_message_id(source_id)
+                        
+                        # Get latest messages
+                        new_messages = []
+                        async for msg in self.client.get_chat_history(source_id, limit=5):
+                            if msg.id > last_message_id:
+                                new_messages.append(msg)
+                            else:
+                                break  # No need to continue once we hit previously seen messages
+                        
+                        # Process new messages in chronological order (oldest first)
+                        if new_messages:
+                            print(f"\n✅ Found {len(new_messages)} new messages in chat {source_id}")
+                            new_messages.reverse()  # Reverse to process oldest first
+                            
+                            for msg in new_messages:
+                                print(f"📥 Processing new message {msg.id} from active polling")
+                                await self._handle_message(msg)
+                    except Exception as e:
+                        if poll_count % 10 == 0:  # Only log errors every 10 polls
+                            print(f"❌ Error polling chat {source_id}: {e}")
+                
+                # Sleep between polling cycles
+                await asyncio.sleep(10)  # Poll every 10 seconds
+                
+        except asyncio.CancelledError:
+            print("🔄 Active message polling stopped")
+            raise
+        except Exception as e:
+            print(f"❌ Error in active message polling: {e}")
+            logger.error(f"Error in active message polling: {e}") 
