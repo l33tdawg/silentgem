@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-SilentGem - A stealthy Telegram translator using Pyrogram and Google Gemini.
+SilentGem - A Telegram translator using Pyrogram and Google Gemini.
+Created by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)
 """
 
 import os
@@ -46,7 +47,7 @@ SILENTGEM_ASCII = """
 ███████║██║███████╗███████╗██║ ╚████║   ██║   ╚██████╔╝███████╗██║ ╚═╝ ██║
 ╚══════╝╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚══════╝╚═╝     ╚═╝
 
-        🔄 Stealthy Telegram Translator using Google Gemini Flash Thinking 🔄
+        🔄 Telegram Translator using Google Gemini Flash Thinking 🔄
 """
 
 def print_debug(*args, **kwargs):
@@ -1057,7 +1058,7 @@ async def interactive_mode():
 async def main():
     """Main entry point for SilentGem"""
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description='SilentGem - A stealthy Telegram translator')
+    parser = argparse.ArgumentParser(description='SilentGem - A Telegram translator by Dhillon Kannabhiran')
     parser.add_argument('--setup', action='store_true', help='Run the setup wizard')
     parser.add_argument('--version', action='store_true', help='Show version info')
     parser.add_argument('--service', action='store_true', help='Start the translation service without menu')

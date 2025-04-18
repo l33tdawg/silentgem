@@ -1,10 +1,10 @@
 # SilentGem
 
-A stealthy Telegram translator using Google Gemini AI.
+A Telegram translator using Google Gemini AI.
 
 ## Description
 
-SilentGem is a Telegram userbot that automatically translates messages from source chats (groups, channels) to your private target channels. It works silently in the background, using Google's Gemini AI for high-quality translation.
+SilentGem is a Telegram userbot that automatically translates messages from source chats (groups, channels) to your private target channels. It works in the background, using Google's Gemini AI for high-quality translation.
 
 ## Features
 
@@ -61,6 +61,10 @@ python main.py
 - `--clear-mappings`: Reset all chat mappings
 - `--version`: Show version information
 
+## Author
+
+Developed by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)
+
 ## License
 
-[MIT License](LICENSE) 
+[MIT License](LICENSE) - Copyright © 2025 
