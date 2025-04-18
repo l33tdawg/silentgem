@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""
+SilentGem CLI - Command-line interface for managing SilentGem
+"""
+
+from silentgem.cli import main
+
+if __name__ == "__main__":
+    main() 
