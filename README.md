@@ -22,6 +22,29 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - Telegram API credentials (API ID and Hash)
 - Google Gemini API key
 
+## API Keys
+
+### Obtaining Telegram API Credentials
+
+1. Visit [my.telegram.org](https://my.telegram.org/auth) and log in with your Telegram account
+2. Click on "API Development Tools"
+3. Fill in the form with the following details:
+   - App title: SilentGem (or any name you prefer)
+   - Short name: silentgem (or any short name)
+   - Platform: Desktop
+   - Description: Telegram translator application
+4. Click "Create Application"
+5. You will receive your **API ID** (a number) and **API Hash** (a string)
+6. Copy these credentials for use in the setup wizard
+
+### Obtaining Google Gemini API Key
+
+1. Visit [AI Studio](https://aistudio.google.com/)
+2. Create or sign in to your Google account
+3. Click "Get API key" in the top right corner
+4. Create a new API key or use an existing one
+5. Copy the API key for use in the setup wizard
+
 ## Installation
 
 1. Clone this repository:
