@@ -72,9 +72,30 @@ def check_and_fix_database_lock():
     lock_files = [f for f in session_files if f.endswith("-journal") or f.endswith("-wal") or f.endswith("-shm")]
     
     if lock_files:
+        # First check if these are just normal SQLite journal files
+        # If it's just a single -journal file and the main session file exists, this is likely normal
+        if len(lock_files) == 1 and os.path.exists(session_path) and lock_files[0].endswith("-journal"):
+            # Try to open the database to check if it's actually locked
+            try:
+                # Attempt to connect to the database - if it succeeds, the database is not locked
+                conn = sqlite3.connect(session_path)
+                conn.close()
+                # Database is fine, no need to prompt
+                print_debug(f"Found journal file '{os.path.basename(lock_files[0])}' but database is not locked.")
+                return False
+            except sqlite3.OperationalError as e:
+                # Only show the prompt if there's an actual lock issue
+                if "database is locked" in str(e):
+                    print(f"Database lock detected: {e}")
+                else:
+                    # Some other SQLite error, but not a lock - no need to prompt
+                    print_debug(f"Database journal present but error is not a lock: {e}")
+                    return False
+        
+        # If we get here, either multiple lock files exist or we confirmed the database is locked
         print(f"Found {len(lock_files)} database lock files:")
         for lf in lock_files:
-            print(f" - {lf}")
+            print(f" - {os.path.basename(lf)}")
             
         print("\nWould you like to clear database locks to fix 'database is locked' errors? (y/n)")
         print("(Recommended: Enter 'y' if you're experiencing issues)")
@@ -136,10 +157,11 @@ def signal_handler(sig, frame):
         else:
             signal_handler.interrupt_count += 1
             
-        # After the third interrupt, just exit completely
-        if signal_handler.interrupt_count >= 3:
+        # After the second interrupt (not third), just exit completely
+        if signal_handler.interrupt_count >= 2:
             print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
-            os._exit(0)
+            # Hard exit with non-zero status
+            os._exit(1)
     else:
         # First Ctrl+C, try graceful shutdown with timeout
         print("\n🛑 Received exit signal. Shutting down gracefully...")
@@ -151,16 +173,24 @@ def signal_handler(sig, frame):
         signal_handler.interrupt_count = 0
         
         # Set a timer to force exit if shutdown takes too long
-        shutdown_timer = threading.Timer(6.0, handle_slow_shutdown)
+        shutdown_timer = threading.Timer(3.0, handle_slow_shutdown)
         shutdown_timer.daemon = True
         shutdown_timer.start()
 
 def handle_slow_shutdown():
     global menu_return_requested, force_shutdown_requested
     
-    print("\n⚠️ Shutdown taking too long. Forcing menu return...")
+    print("\n⚠️ Shutdown taking too long. Forcing immediate shutdown...")
     menu_return_requested = True
     force_shutdown_requested = True
+    
+    # Don't try to access asyncio from this thread - it causes errors
+    # Just set flags and let the main event loop handle it
+    
+    # Set a hard timeout to force exit if nothing happens
+    emergency_timer = threading.Timer(2.0, lambda: os._exit(1))
+    emergency_timer.daemon = True
+    emergency_timer.start()
 
 # Modified to return to menu instead of exiting
 def force_exit():
@@ -173,16 +203,15 @@ def force_exit():
     global shutdown_timer
     if shutdown_timer and shutdown_timer.is_alive():
         shutdown_timer.cancel()
-        
-    # Set a hard timeout to force return to menu if normal process fails
-    emergency_timer = threading.Timer(5.0, lambda: os._exit(0))
+    
+    # Set a emergency timeout timer as a last resort
+    # This will be a hard exit if everything else fails
+    emergency_timer = threading.Timer(3.0, lambda: os._exit(1))
     emergency_timer.daemon = True
     emergency_timer.start()
     
-    # Try to interrupt any running asyncio tasks
-    for task in asyncio.all_tasks():
-        if task != asyncio.current_task():
-            task.cancel()
+    # Don't access asyncio from here - it might not be in an asyncio context
+    # The flags we set will be checked by the asyncio code
 
 # Global variables for shutdown management
 shutdown_in_progress = False
@@ -990,15 +1019,16 @@ async def start_service():
     print("\nStarting SilentGem translation service...")
     print("Press Ctrl+C to return to the menu.")
     
-    # Reset shutdown flags
-    signal_handler.shutdown_requested = False
-    
     # Set up client
     client = None
     task = None
     
     try:
+        # Initialize client first to reduce chance of race conditions
         client = SilentGemClient()
+        # Immediately pass shutdown flag reference to client
+        if hasattr(signal_handler, 'shutdown_requested'):
+            client._shutdown_requested_ref = signal_handler.shutdown_requested
         
         # Set up a cancellable task
         async def run_forever():
@@ -1009,8 +1039,10 @@ async def start_service():
                 print("\nService started successfully. Monitoring chats for messages to translate.")
                 
                 # Wait for shutdown signal
-                while not signal_handler.shutdown_requested and not shutdown_in_progress:
-                    await asyncio.sleep(0.2)  # Shorter interval to be more responsive to shutdown
+                while (not signal_handler.shutdown_requested and 
+                       not shutdown_in_progress and 
+                       hasattr(client, '_running') and client._running):
+                    await asyncio.sleep(0.05)  # Very short interval for immediate response to shutdown
                 
                 print("\nShutdown requested. Stopping service...")
                 return
@@ -1035,30 +1067,34 @@ async def start_service():
                 # Use force_exit to return to menu properly
                 force_exit()
         
-        # Create and start the task with proper exception handling
+        # Create and start the task
+        task = asyncio.create_task(run_forever())
+        
+        # Wait for the task to complete or keyboard interrupt
         try:
-            # Start the task
-            task = asyncio.create_task(run_forever())
-            
-            # Wait for the task to complete or keyboard interrupt
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass  # Expected when cancelling
+            await task
+        except asyncio.CancelledError:
+            pass  # Expected when cancelling
         except KeyboardInterrupt:
             print("\nKeyboard interrupt detected. Starting shutdown process...")
             # Set the shutdown flags to trigger proper cleanup
             signal_handler.shutdown_requested = True
             shutdown_in_progress = True
             menu_return_requested = True
-            
-            # Give shutdown process some time to work
-            try:
-                if task and not task.done():
-                    await asyncio.wait_for(task, timeout=3)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass  # Expected exceptions during shutdown
+            if client:
+                client._force_shutdown = True
+                if hasattr(client, '_running'):
+                    client._running = False
         
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt detected. Starting shutdown process...")
+        signal_handler.shutdown_requested = True
+        shutdown_in_progress = True
+        menu_return_requested = True
+        if client:
+            client._force_shutdown = True
+            if hasattr(client, '_running'):
+                client._running = False
     except Exception as e:
         logger.error(f"Error in service: {e}")
         print(f"\n❌ Error: {e}")
@@ -1072,51 +1108,42 @@ async def start_service():
             print("\n⚠️ Force shutdown requested - accelerating shutdown process...")
             if client:
                 client._force_shutdown = True  # Notify client to shut down faster
+                if hasattr(client, '_running'):
+                    client._running = False
                 
-            # Set a short timeout for cleanup then force return
-            try:
-                # Force exit after a short timeout if cleanup isn't working
-                cleanup_timer = threading.Timer(3.0, lambda: os._exit(0))
-                cleanup_timer.daemon = True
-                cleanup_timer.start()
-            except Exception as e:
-                print(f"Error setting up cleanup timer: {e}")
-                # If we can't even set up the timer, force exit immediately
-                os._exit(0)
+            # Cancel the task immediately if it's still running
+            if task and not task.done():
+                task.cancel()
         
-        # Clean up the task
+        # Clean up the task if not already done
         if task and not task.done():
             logger.info("Cancelling running task...")
             try:
                 task.cancel()
-                # Use a short timeout for quick response
-                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
+                # Use a very short timeout for quick response
+                await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=0.5)
             except (asyncio.TimeoutError, asyncio.CancelledError, MemoryError):
-                cleanup_success = False
-                print("Task cancellation timed out")
+                pass  # Expected during shutdown
             except Exception as e:
                 logger.error(f"Error during task cancellation: {e}")
-                cleanup_success = False
                 print(f"Error during task cancellation: {e}")
         
         # Stop the client
         if client:
             try:
-                await asyncio.wait_for(client.stop(), timeout=2)
+                # Very short timeout to ensure we don't hang
+                await asyncio.wait_for(client.stop(), timeout=1.0)
                 print("Client stopped successfully")
             except (asyncio.TimeoutError, asyncio.CancelledError, MemoryError):
-                cleanup_success = False
                 print("Client stop timed out, but returning to menu anyway")
             except Exception as e:
                 logger.error(f"Error stopping client: {e}")
-                cleanup_success = False
                 print(f"Error stopping client: {e}")
         
-        # Reset all shutdown flags
+        # Reset shutdown flags
         signal_handler.shutdown_requested = False
         shutdown_in_progress = False
         force_shutdown_requested = False
-        menu_return_requested = False
         
         # Cancel any timer
         if shutdown_timer and shutdown_timer.is_alive():
@@ -1124,21 +1151,12 @@ async def start_service():
         
         shutdown_duration = time.time() - shutdown_start_time
         print(f"\nService shutdown completed in {shutdown_duration:.2f} seconds.")
-        if cleanup_success:
-            print("Service was shut down properly.")
-        else:
-            print("Service shutdown had some issues, but we've returned to the menu.")
         
-        if menu_return_requested:
-            print("\nReturning to main menu...")
+        # Always set menu_return_requested to True to guarantee return to menu
+        menu_return_requested = True
+        print("\nReturning to main menu...")
         
-        # Small pause to allow UI to update
-        try:
-            await asyncio.sleep(0.5)
-        except asyncio.CancelledError:
-            # If we're cancelled during this sleep, it's likely because
-            # the whole process is being forcefully shut down
-            pass
+        return True  # Return success to indicate menu should be shown
 
 async def display_menu():
     """Display the interactive menu"""
@@ -1164,43 +1182,56 @@ async def interactive_mode():
     global shutdown_in_progress, force_shutdown_requested, menu_return_requested, shutdown_timer
     
     while True:
-        # Reset shutdown state at each menu iteration
-        shutdown_in_progress = False
-        force_shutdown_requested = False
-        menu_return_requested = False
-        signal_handler.shutdown_requested = False
-        
-        # Cancel any existing timer
-        if shutdown_timer and shutdown_timer.is_alive():
-            shutdown_timer.cancel()
-            shutdown_timer = None
-        
-        choice = await display_menu()
-        
-        if choice == '1':
-            await start_service()
-        elif choice == '2':
-            await list_mappings()
-        elif choice == '3':
-            await list_available_chats()
-        elif choice == '4':
-            await interactive_remove_mapping()
-        elif choice == '5':
-            await setup_wizard()
-        elif choice == '6':
-            from silentgem.setup import config_llm_settings
-            await config_llm_settings()
-        elif choice == '7':
-            from silentgem.setup import config_target_language
-            await config_target_language()
-        elif choice == '8':
-            print("Exiting SilentGem. Goodbye!")
-            break
-        else:
-            print("❌ Invalid choice. Please try again.")
+        try:
+            # Reset shutdown state at each menu iteration
+            shutdown_in_progress = False
+            force_shutdown_requested = False
+            menu_return_requested = False
+            signal_handler.shutdown_requested = False
             
-        # Small pause before showing menu again
-        await asyncio.sleep(0.2)
+            # Cancel any existing timer
+            if shutdown_timer and shutdown_timer.is_alive():
+                shutdown_timer.cancel()
+                shutdown_timer = None
+            
+            choice = await display_menu()
+            
+            if choice == '1':
+                print("\n[INFO] Starting translation service. Use Ctrl+C to return to menu.")
+                service_result = await start_service()
+                # No need to check service_result, just ensure we always show the menu
+                print("\n[INFO] Back at menu after service end.")
+                continue
+            elif choice == '2':
+                await list_mappings()
+            elif choice == '3':
+                await list_available_chats()
+            elif choice == '4':
+                await interactive_remove_mapping()
+            elif choice == '5':
+                await setup_wizard()
+            elif choice == '6':
+                from silentgem.setup import config_llm_settings
+                await config_llm_settings()
+            elif choice == '7':
+                from silentgem.setup import config_target_language
+                await config_target_language()
+            elif choice == '8':
+                print("Exiting SilentGem. Goodbye!")
+                break
+            else:
+                print("❌ Invalid choice. Please try again.")
+                
+            # Small pause before showing menu again
+            await asyncio.sleep(0.2)
+        except KeyboardInterrupt:
+            # Handle Ctrl+C during menu display
+            print("\nInterrupted, returning to menu...")
+            continue
+        except Exception as e:
+            print(f"\n❌ An error occurred: {e}")
+            logger.error(f"Error in interactive mode: {e}")
+            await asyncio.sleep(1)  # Pause to avoid tight error loop
 
 async def main():
     """Main entry point for SilentGem"""

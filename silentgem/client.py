@@ -448,8 +448,18 @@ class SilentGemClient:
         self._shutdown_future = asyncio.Future()
         
         try:
-            # Wait for shutdown signal
-            await self._shutdown_future
+            # Wait for shutdown signal with frequent checks
+            while True:
+                if self._shutdown_future.done():
+                    break
+                    
+                # Check every 50ms for more responsive shutdown
+                await asyncio.sleep(0.05)
+                
+                # Also directly check for external shutdown signals
+                if hasattr(self, '_force_shutdown') and self._force_shutdown:
+                    print("🛑 Force shutdown detected in idle loop")
+                    break
         except asyncio.CancelledError:
             logger.info("Client task cancelled")
         except Exception as e:
@@ -457,47 +467,64 @@ class SilentGemClient:
         finally:
             # Make sure we're fully stopped
             self._running = False
+            # Ensure future is done if we broke out via direct check
+            if not self._shutdown_future.done():
+                self._shutdown_future.set_result(None)
             logger.info("Client idle loop complete")
     
     async def stop(self):
         """Stop the client and cancel all tasks."""
-        if self._shutdown_future and not self._shutdown_future.done():
-            self.logger.info("Stop requested - signaling main loop to terminate")
-            self._running = False
+        print("\n⏹️ Stopping SilentGem client...")
+        logger.info("Stopping SilentGem client")
+        
+        # CRITICAL: First thing, set running to False to stop all background tasks
+        self._running = False
+        
+        # Ensure the shutdown future is set
+        if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
+            logger.info("Setting shutdown future")
             self._shutdown_future.set_result(None)
-
-        print("\n Stopping SilentGem client...")
-        self.logger.info("Stopping SilentGem client")
         
         # Check if force shutdown was requested from main process
         if hasattr(self, '_force_shutdown') and self._force_shutdown:
-            self.logger.warning("Force shutdown requested - cancelling all tasks immediately")
+            logger.warning("Force shutdown requested - cancelling all tasks immediately")
             print("⚠️ Force shutdown mode - cancelling all tasks immediately")
         
-        # Cancel all background tasks
-        if self._background_tasks:
-            print(f"📉 Cancelling {len(self._background_tasks)} background tasks...")
-            self.logger.info(f"Cancelling {len(self._background_tasks)} background tasks")
-            for task in self._background_tasks:
-                if not task.done():
-                    task.cancel()
-            self._background_tasks.clear()
+        # Cancel all background tasks with a short timeout
+        tasks_cancelled = 0
+        for task_name, task in list(self._tasks.items()):
+            if not task.done():
+                print(f"📉 Cancelling task: {task_name}")
+                task.cancel()
+                tasks_cancelled += 1
+                
+                try:
+                    # Very short timeout for each task to avoid hanging
+                    await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    # Expected exceptions during cancellation
+                    pass
+                except Exception as e:
+                    logger.error(f"Error waiting for task {task_name} to cancel: {e}")
+        
+        print(f"📉 Cancelled {tasks_cancelled} background tasks")
+        self._tasks.clear()
 
         # Try to stop the Telegram client with reduced timeout to avoid hangs
-        if self._telegram_client:
+        if hasattr(self, 'client'):
             try:
-                self.logger.info("Stopping Telegram client connection")
-                await asyncio.wait_for(self._telegram_client.stop(), timeout=1.0)
-                self.logger.info("Telegram client stopped successfully")
+                logger.info("Stopping Telegram client connection")
+                await asyncio.wait_for(self.client.stop(), timeout=1.5)
+                logger.info("Telegram client stopped successfully")
+                print("✅ Telegram client stopped successfully")
             except asyncio.TimeoutError:
-                self.logger.warning("Telegram client stop timed out, but shutdown will continue")
+                logger.warning("Telegram client stop timed out, but shutdown will continue")
                 print("⚠️ Telegram client disconnect timed out, but shutdown will continue")
             except Exception as e:
-                self.logger.error(f"Error stopping Telegram client: {e}")
+                logger.error(f"Error stopping Telegram client: {e}")
+                print(f"⚠️ Error stopping Telegram client: {e}")
         
-        # Clear running state
-        self._running = False
-        self.logger.info("SilentGem client stopped")
+        logger.info("SilentGem client stopped")
         print("✅ SilentGem client stopped")
     
     async def _heartbeat(self):
@@ -531,12 +558,26 @@ class SilentGemClient:
     async def _sync_missed_messages(self):
         """Sync any messages that might have been missed while offline"""
         try:
-            # Wait a moment to let everything initialize
-            await asyncio.sleep(15)
+            # Wait a moment to let everything initialize, but check if we're shutting down first
+            for _ in range(15):
+                if not hasattr(self, '_running') or not self._running:
+                    print("💤 Message sync cancelled - shutdown in progress")
+                    return
+                await asyncio.sleep(1)
             
+            # Check again before proceeding with any work
+            if not hasattr(self, '_running') or not self._running:
+                print("💤 Message sync cancelled - shutdown in progress")
+                return
+                
             print("\n🔄 Checking for missed messages since last run...")
             
             for source_id in self.chat_mapping.keys():
+                # Check for shutdown in each iteration
+                if not hasattr(self, '_running') or not self._running:
+                    print("💤 Message sync cancelled - shutdown in progress")
+                    return
+                    
                 try:
                     # Get the last processed message ID for this chat
                     last_message_id = self.mapper.get_last_message_id(source_id)
@@ -547,6 +588,9 @@ class SilentGemClient:
                         # Get messages newer than the last processed ID
                         missed_messages = []
                         async for msg in self.client.get_chat_history(source_id, limit=20):
+                            if not hasattr(self, '_running') or not self._running:
+                                print("💤 Message history retrieval cancelled - shutdown in progress")
+                                return
                             if msg.id > last_message_id:
                                 missed_messages.append(msg)
                             else:
@@ -558,6 +602,10 @@ class SilentGemClient:
                             print(f"🔄 Found {len(missed_messages)} missed messages to process in chat {source_id}")
                             
                             for idx, msg in enumerate(missed_messages):
+                                # Check for shutdown before each message processing
+                                if not hasattr(self, '_running') or not self._running:
+                                    print("💤 Message processing cancelled - shutdown in progress")
+                                    return
                                 print(f"🔄 Processing missed message {idx+1}/{len(missed_messages)} (ID: {msg.id})")
                                 await self._handle_message(msg)
                         else:
@@ -568,6 +616,9 @@ class SilentGemClient:
                         # Just mark the latest message as processed so we don't translate old history
                         messages = []
                         async for msg in self.client.get_chat_history(source_id, limit=1):
+                            if not hasattr(self, '_running') or not self._running:
+                                print("💤 History retrieval cancelled - shutdown in progress")
+                                return
                             messages.append(msg)
                         
                         if messages:
@@ -593,9 +644,18 @@ class SilentGemClient:
     async def _active_message_polling(self):
         """Actively poll for new messages in case event handlers aren't working"""
         try:
-            # Wait a moment to let everything initialize
-            await asyncio.sleep(20)  # Wait longer to ensure sync completes first
+            # Wait a moment to let everything initialize but check shutdown flag repeatedly
+            for _ in range(20):
+                if not hasattr(self, '_running') or not self._running:
+                    print("💤 Message polling cancelled - shutdown in progress")
+                    return
+                await asyncio.sleep(1)
             
+            # Check again before proceeding with any work
+            if not hasattr(self, '_running') or not self._running:
+                print("💤 Message polling cancelled - shutdown in progress")
+                return
+                
             print("\n🔄 Starting active message polling as a fallback mechanism...")
             
             # Now continuously poll for new messages, using the message state tracker
@@ -606,6 +666,11 @@ class SilentGemClient:
                     print(f"\n🔄 Active polling cycle #{poll_count}")
                 
                 for source_id in self.chat_mapping.keys():
+                    # Check for shutdown before each chat processing
+                    if not hasattr(self, '_running') or not self._running:
+                        print("💤 Polling cancelled - shutdown in progress")
+                        return
+                        
                     try:
                         # Get the last processed message ID
                         last_message_id = self.mapper.get_last_message_id(source_id)
@@ -613,6 +678,9 @@ class SilentGemClient:
                         # Get latest messages
                         new_messages = []
                         async for msg in self.client.get_chat_history(source_id, limit=5):
+                            if not hasattr(self, '_running') or not self._running:
+                                print("💤 History retrieval cancelled - shutdown in progress")
+                                return
                             if msg.id > last_message_id:
                                 new_messages.append(msg)
                             else:
@@ -624,14 +692,21 @@ class SilentGemClient:
                             new_messages.reverse()  # Reverse to process oldest first
                             
                             for msg in new_messages:
+                                # Check for shutdown before processing each message
+                                if not hasattr(self, '_running') or not self._running:
+                                    print("💤 Message processing cancelled - shutdown in progress")
+                                    return
                                 print(f"📥 Processing new message {msg.id} from active polling")
                                 await self._handle_message(msg)
                     except Exception as e:
                         if poll_count % 10 == 0:  # Only log errors every 10 polls
                             print(f"❌ Error polling chat {source_id}: {e}")
                 
-                # Sleep between polling cycles
-                await asyncio.sleep(10)  # Poll every 10 seconds
+                # Sleep between polling cycles with frequent shutdown checks
+                for _ in range(10):  # 10 x 1 second = 10 seconds total
+                    if not hasattr(self, '_running') or not self._running:
+                        return
+                    await asyncio.sleep(1)
                 
         except asyncio.CancelledError:
             print("🔄 Active message polling stopped")
