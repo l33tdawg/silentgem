@@ -16,8 +16,17 @@ API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 SESSION_NAME = os.getenv("SESSION_NAME", "silentgem")
 
+# LLM settings
+LLM_ENGINE = os.getenv("LLM_ENGINE", "gemini").lower()  # Options: "gemini" or "ollama"
+
 # Gemini settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+
+# Ollama settings
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
+
+# Translation settings
 TARGET_LANGUAGE = os.getenv("TARGET_LANGUAGE", "english")
 
 # File paths
@@ -53,9 +62,23 @@ def validate_config():
     if not API_HASH:
         logger.error("TELEGRAM_API_HASH not set in .env file")
         return False
-    if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY not set in .env file")
+    
+    # Validate LLM engine specific settings
+    if LLM_ENGINE == "gemini":
+        if not GEMINI_API_KEY:
+            logger.error("GEMINI_API_KEY not set in .env file")
+            return False
+    elif LLM_ENGINE == "ollama":
+        if not OLLAMA_URL:
+            logger.error("OLLAMA_URL not set in .env file")
+            return False
+        if not OLLAMA_MODEL:
+            logger.error("OLLAMA_MODEL not set in .env file")
+            return False
+    else:
+        logger.error(f"Unknown LLM_ENGINE: {LLM_ENGINE}. Must be 'gemini' or 'ollama'")
         return False
+        
     return True
 
 def load_mapping():

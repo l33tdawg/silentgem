@@ -1,26 +1,29 @@
 # SilentGem
 
-A Telegram translator using Google Gemini AI.
+A Telegram translator using Google Gemini AI or local LLMs via Ollama.
 
 ## Description
 
-SilentGem is a Telegram userbot that automatically translates messages from source chats (groups, channels) to your private target channels. It works in the background, using Google's Gemini AI for high-quality translation.
+SilentGem is a Telegram userbot that automatically translates messages from source chats (groups, channels) to your private target channels. It works in the background, using either Google's Gemini AI or local LLMs via Ollama for high-quality translation.
 
 ## Features
 
 - Monitor multiple source chats simultaneously
-- Translate to any language supported by Google Gemini
+- Translate to any language supported by Google Gemini or your local LLM
+- Choose between cloud-based (Gemini) or local (Ollama) translation engines
 - Forward media with translated captions
 - Preserve attribution to original senders
 - Detect and skip already-English messages when target is English
 - Interactive setup wizard for easy configuration
 - CLI tools for managing chat mappings
+- Update translation engines without redoing full setup
 
 ## Requirements
 
 - Python 3.7+
 - Telegram API credentials (API ID and Hash)
-- Google Gemini API key
+- Google Gemini API key (if using Gemini)
+- Ollama installed and running (if using local LLMs)
 
 ## API Keys
 
@@ -45,6 +48,13 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 4. Create a new API key or use an existing one
 5. Copy the API key for use in the setup wizard
 
+### Setting Up Ollama (for local LLM translation)
+
+1. Install Ollama from [ollama.ai](https://ollama.ai/)
+2. Start the Ollama service
+3. Pull a model like llama3 using `ollama pull llama3`
+4. SilentGem will automatically detect available models
+
 ## Installation
 
 1. Clone this repository:
@@ -65,7 +75,8 @@ pip install -r requirements.txt
 
 The setup wizard will guide you through:
 - Setting up Telegram API credentials
-- Configuring Google Gemini API key
+- Choosing between Gemini AI or Ollama for translation
+- Configuring API keys or local model settings
 - Selecting source chats to monitor
 - Setting up target channels for translations
 
@@ -82,7 +93,23 @@ Start the translation service:
 - `--service`: Start the translation service directly (non-interactive)
 - `--cleanup`: Clean up any database lock issues
 - `--clear-mappings`: Reset all chat mappings
+- `--config-llm`: Update LLM engine settings without redoing full setup
+- `--config-language`: Update target language without redoing full setup
 - `--version`: Show version information
+
+### Switching Between Translation Engines
+
+You can easily switch between Gemini and Ollama:
+
+1. From the command line: `python silentgem.py --config-llm`
+2. From the interactive menu: Select option 6 "Update LLM Settings"
+
+### Using Ollama
+
+When using Ollama, you can:
+- Specify the URL (default: http://localhost:11434)
+- Choose from models you've already pulled
+- Change models without redoing the entire setup
 
 ## Author
 
