@@ -111,6 +111,29 @@ When using Ollama, you can:
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
 
+## Roadmap
+
+### Version 1.1 - Chat Insight Enhancement
+
+Future versions of SilentGem will include a powerful chat insight feature that allows you to query your conversation history and communicate bidirectionally:
+
+- **Message Storage System**: Automatic storage of all translated messages with metadata
+- **Telegram Bot Integration**: Dedicated bot for interacting with your message history
+- **Natural Language Query Interface**: Simplified commands to search and retrieve information:
+  - `/askgem [query]` - Search and retrieve information from past conversations
+  - Natural language queries without command prefix (e.g., "Who talked about the API yesterday?")
+
+### Version 1.2 - Bidirectional Communication
+
+Building on the chat insights, version 1.2 will enable seamless bidirectional communication:
+
+- **Reply to Original Messages**: Send replies back to source chats with automatic translation
+  - `/reply [message]` - Reply to the last message in original source chat
+  - `/send [message]` - Send a new message to the original channel
+- **Enhanced Search Capabilities**: Semantic search for concept-based queries
+- **Conversation Summarization**: Get AI-generated summaries of past discussions
+- **Secure & Private**: All features respect your privacy with user-owned data storage
+
 ## Author
 
 Developed by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)

@@ -46,3 +46,6 @@ logs/
 *.swp
 *.swo
 .DS_Store 
+
+#  MD specific files 
+chat-insight-enhancement.md

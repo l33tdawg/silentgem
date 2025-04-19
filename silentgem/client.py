@@ -7,6 +7,7 @@ from pathlib import Path
 from pyrogram import Client, filters, types, errors
 from loguru import logger
 import sqlite3
+import time
 
 from silentgem.config import API_ID, API_HASH, SESSION_NAME, load_mapping, TARGET_LANGUAGE, LLM_ENGINE
 from silentgem.translator import create_translator
@@ -161,6 +162,11 @@ class SilentGemClient:
     async def _handle_message(self, message):
         """Handle incoming messages from monitored chats"""
         try:
+            # Update the last time we received a message through event handlers
+            # This helps our polling system adapt its frequency
+            if hasattr(self, 'client') and message._client == self.client:
+                self._last_event_message_time = time.time()
+            
             # Ensure chat_id is a string for consistent lookup
             chat_id = str(message.chat.id)
             logger.debug(f"Received message in chat {chat_id}: {message.text[:50] if message.text else ''}")
@@ -570,7 +576,6 @@ class SilentGemClient:
                         try:
                             first_source = list(self.chat_mapping.keys())[0]
                             chat = await self.client.get_chat(first_source)
-                            print(f"✅ Successfully verified access to chat: {chat.title} (ID: {chat.id})")
                         except Exception as e:
                             print(f"⚠️ Warning: Could not access source chat {first_source}: {e}")
         except asyncio.CancelledError:
@@ -681,12 +686,37 @@ class SilentGemClient:
                 
             print("\n🔄 Starting active message polling as a fallback mechanism...")
             
+            # Track last time we received a message through the event handler
+            # Initialize with a property if it doesn't exist
+            if not hasattr(self, '_last_event_message_time'):
+                self._last_event_message_time = 0
+            
             # Now continuously poll for new messages, using the message state tracker
             poll_count = 0
+            # Start with a longer polling interval to reduce network traffic
+            polling_interval = 30  # 30 seconds between polls
+            
             while hasattr(self, '_running') and self._running:
                 poll_count += 1
                 if poll_count % 10 == 0:  # Only log every 10 polls to reduce spam
                     print(f"\n🔄 Active polling cycle #{poll_count}")
+                
+                # Check if we've received messages through event handlers recently
+                # If yes, we can poll less frequently
+                time_since_last_event = time.time() - self._last_event_message_time
+                
+                # If we've received a message via event handler in the last 5 minutes,
+                # we can reduce polling frequency
+                if self._last_event_message_time > 0 and time_since_last_event < 300:  # 5 minutes
+                    # Event handlers seem to be working, use longer interval
+                    polling_interval = 60  # 60 seconds
+                    if poll_count % 10 == 0:
+                        print(f"ℹ️ Event handlers active, using reduced polling frequency")
+                else:
+                    # No recent messages through event handlers, be more aggressive with polling
+                    polling_interval = 30  # 30 seconds
+                    if poll_count % 10 == 0 and self._last_event_message_time > 0:
+                        print(f"ℹ️ No recent events, using standard polling frequency")
                 
                 for source_id in self.chat_mapping.keys():
                     # Check for shutdown before each chat processing
@@ -726,10 +756,12 @@ class SilentGemClient:
                             print(f"❌ Error polling chat {source_id}: {e}")
                 
                 # Sleep between polling cycles with frequent shutdown checks
-                for _ in range(10):  # 10 x 1 second = 10 seconds total
+                # Use our adaptive polling interval, but still check frequently for shutdown
+                sleep_interval = 1  # Check for shutdown every second
+                for _ in range(polling_interval):
                     if not hasattr(self, '_running') or not self._running:
                         return
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(sleep_interval)
                 
         except asyncio.CancelledError:
             print("🔄 Active message polling stopped")
