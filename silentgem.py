@@ -467,7 +467,7 @@ async def remove_mapping(source_id):
 
 async def create_target_channel(app, source_chat):
     """Create a new channel for translation output"""
-    channel_name = f"{source_chat['title']}-silentgem"
+    channel_name = f"silentgem-{source_chat['title']}"
     # Ensure name isn't too long (Telegram has a 128 character limit for chat titles)
     if len(channel_name) > 120:
         channel_name = channel_name[:117] + "..."
@@ -597,7 +597,8 @@ async def delete_channel_if_auto_created(channel_id, existing_app=None):
             return False
         
         # Check if this was a SilentGem auto-created channel (by name)
-        is_auto_created = "-silentgem" in channel.title
+        # Support both new naming convention "silentgem-X" and old "-silentgem" for backwards compatibility
+        is_auto_created = channel.title.startswith("silentgem-") or "-silentgem" in channel.title
         
         if is_auto_created:
             print(f"Detected auto-created channel: {channel.title}")
