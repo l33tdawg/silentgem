@@ -259,10 +259,18 @@ class SilentGemClient:
                         print(f"✅ Media forwarded to {target_chat_id}")
                     except Exception as e:
                         print(f"❌ Failed to forward media: {e}")
+                    
+                    # UPDATE: Track message ID for media-only messages too
+                    self.mapper.update_last_message_id(chat_id, message.id)
+                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     return
                 else:
                     logger.debug("Message has no text or caption, ignoring")
                     print("❌ Message has no text or caption, ignoring")
+                    
+                    # UPDATE: Still track the message ID even if it has no content
+                    self.mapper.update_last_message_id(chat_id, message.id)
+                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     return
             
             text = message.text or message.caption
@@ -311,6 +319,10 @@ class SilentGemClient:
                         print(f"✅ Media forwarded to {target_chat_id}")
                     except Exception as e:
                         print(f"❌ Failed to forward media: {e}")
+                
+                # UPDATE: Always track message ID
+                self.mapper.update_last_message_id(chat_id, message.id)
+                print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                 return
             
             # Detect if the message is likely in English already
@@ -368,6 +380,10 @@ class SilentGemClient:
                         disable_web_page_preview=True,
                     )
                 print(f"✅ Original message forwarded to {target_chat_id}")
+                
+                # UPDATE: Track message ID for skipped translations too
+                self.mapper.update_last_message_id(chat_id, message.id)
+                print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                 return
             
             # Translate the text
@@ -441,6 +457,13 @@ class SilentGemClient:
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             print(f"❌ Error handling message: {e}")
+            
+            # Even if there's an error, try to update the message ID to avoid reprocessing
+            try:
+                self.mapper.update_last_message_id(str(message.chat.id), message.id)
+                print(f"✅ Updated message ID to {message.id} despite error (to avoid reprocessing)")
+            except Exception as err:
+                print(f"❌ Failed to update message ID after error: {err}")
     
     async def _idle(self):
         """Keep the client running until stopped"""
