@@ -309,11 +309,15 @@ Respond with a JSON object containing:
                         # Add terms from expanded_terms
                         expanded_terms = final_result.get("expanded_terms", [])
                         if expanded_terms:
+                            # Ensure all items are strings
+                            expanded_terms = [str(term) for term in expanded_terms if term is not None]
                             expanded_query_parts.extend(expanded_terms)
                             
                         # Add terms from alternative_phrasings
                         alt_phrasings = final_result.get("alternative_phrasings", [])
                         if alt_phrasings:
+                            # Ensure all items are strings
+                            alt_phrasings = [str(term) for term in alt_phrasings if term is not None]
                             expanded_query_parts.extend(alt_phrasings)
                         
                         # Create OR query

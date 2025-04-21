@@ -16,7 +16,7 @@ class LLMClient:
         """Initialize the LLM client"""
         self.config = get_insights_config()
         self.api_key = self.config.get("llm_api_key", os.environ.get("GEMINI_API_KEY", ""))
-        self.model = self.config.get("llm_model", "gemini-pro")
+        self.model = self.config.get("llm_model", "llama3")  # Default to llama3 instead of gemini-pro
         self.ollama_url = self.config.get("ollama_url", "http://localhost:11434")
         self._client = None
         self._client_type = None
@@ -27,7 +27,34 @@ class LLMClient:
     def _initialize_client(self):
         """Initialize the client based on configuration"""
         try:
-            # Initialize based on model type
+            # Check if we should use Ollama based on config
+            use_ollama = self.config.get("use_ollama", True)  # Default to True
+            ollama_models = ["llama", "mistral", "solar", "phi", "llama3", "mixtral", "yi"]
+            
+            # Determine if the model is an Ollama model
+            is_ollama_model = (
+                use_ollama or 
+                "ollama" in self.model.lower() or 
+                any(model in self.model.lower() for model in ollama_models)
+            )
+            
+            # Initialize Ollama first if it's enabled or the model suggests it
+            if is_ollama_model:
+                try:
+                    import httpx
+                    self._client = httpx.AsyncClient(base_url=self.ollama_url, timeout=60.0)
+                    self._client_type = "ollama"
+                    
+                    # If model still has gemini prefix but we're using Ollama, switch to a default
+                    if "gemini" in self.model.lower():
+                        self.model = "llama3"
+                        
+                    logger.info(f"Initialized Ollama client with model: {self.model} at {self.ollama_url}")
+                    return  # Successfully initialized Ollama
+                except ImportError:
+                    logger.error("Failed to import httpx library. Please install with: pip install httpx")
+            
+            # Fall back to Gemini if Ollama wasn't used or failed
             if "gemini" in self.model.lower():
                 if not self.api_key:
                     logger.warning("No Gemini API key provided. Set GEMINI_API_KEY environment variable or configure in settings.")
@@ -36,20 +63,32 @@ class LLMClient:
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=self.api_key)
-                    self._client = genai
-                    self._client_type = "gemini"
-                    logger.info(f"Initialized Google Gemini client with model: {self.model}")
+                    
+                    # Check if the model is available
+                    try:
+                        # Use a newer model by default for better compatibility
+                        if self.model == "gemini-pro":
+                            self.model = "gemini-1.5-pro"
+                            
+                        # Test model initialization without making an API call
+                        genai.GenerativeModel(self.model)
+                        
+                        self._client = genai
+                        self._client_type = "gemini"
+                        logger.info(f"Initialized Google Gemini client with model: {self.model}")
+                    except Exception as model_error:
+                        logger.error(f"Error with Gemini model {self.model}: {model_error}")
+                        logger.info("Falling back to gemini-1.5-pro model")
+                        self.model = "gemini-1.5-pro"
+                        try:
+                            genai.GenerativeModel(self.model)
+                            self._client = genai
+                            self._client_type = "gemini"
+                            logger.info(f"Initialized Google Gemini client with model: {self.model}")
+                        except Exception as fallback_error:
+                            logger.error(f"Error with fallback Gemini model: {fallback_error}")
                 except ImportError:
                     logger.error("Failed to import Google Generative AI library. Please install with: pip install google-generativeai")
-            
-            elif "ollama" in self.model.lower() or any(model in self.model.lower() for model in ["llama", "mistral", "solar", "phi"]):
-                try:
-                    import httpx
-                    self._client = httpx.AsyncClient(base_url=self.ollama_url, timeout=60.0)
-                    self._client_type = "ollama"
-                    logger.info(f"Initialized Ollama client with model: {self.model} at {self.ollama_url}")
-                except ImportError:
-                    logger.error("Failed to import httpx library. Please install with: pip install httpx")
             else:
                 logger.warning(f"Unsupported model type: {self.model}. Please use Gemini or Ollama models.")
                 

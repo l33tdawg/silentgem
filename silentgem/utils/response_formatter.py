@@ -10,6 +10,7 @@ from collections import defaultdict
 
 from silentgem.translator import create_translator, BaseTranslator
 from silentgem.config.insights_config import get_insights_config
+from silentgem.llm.llm_client import get_llm_client
 
 async def format_search_results(
     messages: List[Dict[str, Any]],
