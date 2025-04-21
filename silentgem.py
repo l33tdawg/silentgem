@@ -29,6 +29,8 @@ from pyrogram.enums import ChatType
 
 # Import chat insights setup
 from silentgem.setup.insights_setup import setup_insights, clear_insights_history
+from silentgem.bot.telegram_bot import get_insights_bot
+from silentgem.bot.command_handler import get_command_handler
 
 # Add debug flag
 DEBUG = os.environ.get("SILENTGEM_DEBUG", "0") == "1"
@@ -163,6 +165,11 @@ def signal_handler(sig, frame):
         # After the second interrupt (not third), just exit completely
         if signal_handler.interrupt_count >= 2:
             print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
+            # Call cleanup before hard exit
+            try:
+                asyncio.run(cleanup())
+            except:
+                pass
             # Hard exit with non-zero status
             os._exit(1)
     else:
@@ -1445,8 +1452,55 @@ async def main():
             logger.info("SilentGem stopped")
         return
     
+    # Start monitoring sources
+    await client.start_client()
+    
+    # Start the insights bot if configured
+    from silentgem.config.insights_config import is_insights_configured
+    if is_insights_configured():
+        try:
+            # Initialize command handler and bot
+            insights_bot = get_insights_bot()
+            command_handler = get_command_handler()
+            
+            # Link the command handler to the bot
+            insights_bot.set_command_handler(command_handler)
+            
+            # Start the bot
+            await insights_bot.start()
+            logger.info("Chat Insights bot started successfully")
+        except Exception as e:
+            logger.error(f"Failed to start Chat Insights bot: {e}")
+    
     # Otherwise, show interactive menu
     await interactive_mode()
 
+async def cleanup():
+    """Clean up resources on exit"""
+    # Stop the translation client
+    client = get_client()
+    if client:
+        await client.stop_client()
+        
+    # Stop the insights bot if running
+    try:
+        from silentgem.config.insights_config import is_insights_configured
+        if is_insights_configured():
+            insights_bot = get_insights_bot()
+            await insights_bot.stop()
+            logger.info("Chat Insights bot stopped")
+    except Exception as e:
+        logger.error(f"Error stopping insights bot: {e}")
+
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Handle keyboard interrupt
+        print("\nShutting down SilentGem...")
+        asyncio.run(cleanup())
+    except Exception as e:
+        logger.error(f"Unhandled exception: {e}")
+        # Ensure cleanup happens even on unhandled exceptions
+        asyncio.run(cleanup())
+        sys.exit(1) 

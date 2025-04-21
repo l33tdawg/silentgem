@@ -17,6 +17,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - Interactive setup wizard for easy configuration
 - CLI tools for managing chat mappings
 - Update translation engines without redoing full setup
+- Chat Insights for searching and analyzing conversation history (NEW in v1.1)
 
 ## Requirements
 
@@ -95,6 +96,8 @@ Start the translation service:
 - `--clear-mappings`: Reset all chat mappings
 - `--config-llm`: Update LLM engine settings without redoing full setup
 - `--config-language`: Update target language without redoing full setup
+- `--setup-insights`: Configure Chat Insights feature
+- `--clear-insights-history`: Clear stored message history used for Chat Insights
 - `--version`: Show version information
 
 ### Switching Between Translation Engines
@@ -111,21 +114,75 @@ When using Ollama, you can:
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
 
+## Chat Insights Feature (v1.1)
+
+SilentGem now includes a powerful Chat Insight feature that allows you to query your conversation history in your translated channels:
+
+### Overview
+
+Chat Insights automatically stores all translated messages in a local database and provides a natural language interface to search and analyze your conversation history through a dedicated Telegram bot.
+
+### Setting Up Chat Insights
+
+Chat Insights is enabled by default. You can customize its settings with:
+
+```bash
+python silentgem.py --setup-insights
+```
+
+During setup, you'll create a dedicated Telegram bot (via BotFather) that will be automatically added to your target channels.
+
+### Using Chat Insights
+
+There are two ways to query your conversation history:
+
+#### 1. Using the /askgem Command
+
+In any target channel where the bot is present:
+
+```
+/askgem Who talked about APIs yesterday?
+```
+
+#### 2. Directly Messaging the Bot
+
+You can also directly message the bot with your query:
+
+```
+Who talked about APIs yesterday?
+```
+
+### Example Queries
+
+Chat Insights understands natural language queries. Examples:
+
+- "What was discussed today?"
+- "Show messages from yesterday about the project"
+- "Find all mentions of APIs from last week"
+- "What did Alice say about the database?"
+- "Show discussions about the UI redesign"
+
+### Privacy and Security
+
+Your messages are stored locally on your system. You can configure:
+
+- **Message retention periods**: Control how long messages are stored
+- **Anonymization**: Remove sender information
+- **Content filtering**: Store only metadata instead of full content
+
+To clear all stored message history:
+
+```bash
+python silentgem.py --clear-insights-history
+```
+
+For more detailed documentation on Chat Insights, see `docs/chat_insights.md`
+
 ## Roadmap
-
-### Version 1.1 - Chat Insight Enhancement
-
-Future versions of SilentGem will include a powerful chat insight feature that allows you to query your conversation history and communicate bidirectionally:
-
-- **Message Storage System**: Automatic storage of all translated messages with metadata
-- **Telegram Bot Integration**: Dedicated bot for interacting with your message history
-- **Natural Language Query Interface**: Simplified commands to search and retrieve information:
-  - `/askgem [query]` - Search and retrieve information from past conversations
-  - Natural language queries without command prefix (e.g., "Who talked about the API yesterday?")
 
 ### Version 1.2 - Bidirectional Communication
 
-Building on the chat insights, version 1.2 will enable seamless bidirectional communication:
+The next version will enable seamless bidirectional communication:
 
 - **Reply to Original Messages**: Send replies back to source chats with automatic translation
   - `/reply [message]` - Reply to the last message in original source chat
