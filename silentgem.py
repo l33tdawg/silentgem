@@ -19,7 +19,7 @@ from loguru import logger
 import threading
 from colorama import Fore, Style
 
-from silentgem.config import validate_config, MAPPING_FILE, API_ID, API_HASH, GEMINI_API_KEY, SESSION_NAME
+from silentgem.config import validate_config, MAPPING_FILE, API_ID, API_HASH, GEMINI_API_KEY, SESSION_NAME, DATA_DIR, LOG_LEVEL
 from silentgem.client import SilentGemClient, get_client
 from silentgem.utils import ensure_dir_exists, get_chat_info
 from silentgem.setup import setup_wizard, config_llm_settings, config_target_language
@@ -1248,7 +1248,7 @@ async def interactive_mode():
             logger.error(f"Error in interactive mode: {e}")
             await asyncio.sleep(1)  # Pause to avoid tight error loop
 
-async def parse_arguments():
+def parse_arguments():
     """Parse command-line arguments"""
     parser = argparse.ArgumentParser(description='SilentGem - A Telegram translator by Dhillon Kannabhiran')
     parser.add_argument('--setup', action='store_true', help='Run the setup wizard')
@@ -1490,6 +1490,9 @@ async def main():
     except Exception as e:
         logger.error(f"Error checking version upgrade status: {e}")
     
+    # Initialize client before use
+    client = SilentGemClient()
+    
     # If service flag is provided, start translation service directly
     if args.service:
         try:
@@ -1530,14 +1533,22 @@ async def main():
 async def cleanup():
     """Clean up resources on exit"""
     # Stop the translation client
-    client = get_client()
-    if client:
-        await client.stop_client()
+    try:
+        # Import here to ensure we have the latest version
+        from silentgem.client import get_client
+        client = get_client()
+        if client:
+            await client.stop_client()
+            logger.info("Translation client stopped")
+    except Exception as e:
+        logger.error(f"Error stopping translation client: {e}")
         
     # Stop the insights bot if running
     try:
         from silentgem.config.insights_config import is_insights_configured
+        
         if is_insights_configured():
+            from silentgem.bot.telegram_bot import get_insights_bot
             insights_bot = get_insights_bot()
             await insights_bot.stop()
             logger.info("Chat Insights bot stopped")
