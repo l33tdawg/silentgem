@@ -140,8 +140,8 @@ To create a bot for Chat Insights:
 2. Start a chat with BotFather
 3. Send the `/newbot` command
 4. Follow the instructions to:
-   - Set a name for your bot (e.g., "SilentGem Insights")
-   - Set a username for your bot (must end with "bot", e.g., "silentgem_insights_bot")
+   - Set a name for your bot: We recommend using "SilentAsk" for consistency
+   - Set a username for your bot: We recommend "silentask_bot" (or any name ending with "bot")
 5. BotFather will give you a token (like `123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ`)
 6. Copy this token when prompted during the `--setup-insights` process
 

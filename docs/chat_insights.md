@@ -14,7 +14,7 @@ Chat Insights is enabled by default when you install SilentGem. You can customiz
 python silentgem.py --setup-insights
 ```
 
-During setup, you'll create a dedicated Telegram bot (via BotFather) that will be added to your target channels. This bot processes your queries and searches through your conversation history.
+During setup, you'll create a dedicated Telegram bot (via BotFather) that will be added to your target channels. This bot processes your queries and searches through your conversation history. We recommend naming this bot "SilentAsk" for consistency.
 
 ## Using Chat Insights
 
@@ -37,7 +37,7 @@ Who talked about APIs yesterday?
 ```
 
 If you're in a group channel, you'll need to either:
-- Mention the bot (@YourBotName) in your message
+- Mention the bot (@SilentAsk) in your message
 - Reply to one of the bot's previous messages
 
 ## Example Queries
@@ -102,7 +102,7 @@ When you add a new target channel in SilentGem, you'll need to add the Chat Insi
 1. Open the channel in Telegram
 2. Click the channel name/title at the top
 3. Select "Add members"
-4. Search for your bot by name (@YourBotName)
+4. Search for your bot by name (@SilentAsk)
 5. Add the bot to the channel
 
 ## Advanced Usage

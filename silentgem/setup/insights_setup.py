@@ -66,6 +66,8 @@ class InsightsSetup:
         print("1. Open Telegram and search for @BotFather")
         print("2. Send /newbot command")
         print("3. Follow the instructions to create a bot")
+        print("   - Suggested name: SilentAsk")
+        print("   - Suggested username: silentask_bot (or any name ending with 'bot')")
         print("4. BotFather will give you a token (like 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ)")
         
         current_token = self.config.get("bot_token", "")
