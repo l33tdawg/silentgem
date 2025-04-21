@@ -1559,11 +1559,14 @@ async def cleanup():
     # Stop the translation client
     try:
         # Import here to ensure we have the latest version
-        from silentgem.client import get_client
-        client = get_client()
-        if client:
-            await client.stop_client()
+        from silentgem.client import _instance
+        
+        # Only stop if an instance already exists, don't create one
+        if _instance is not None:
+            await _instance.stop_client()
             logger.info("Translation client stopped")
+        else:
+            logger.info("No translation client instance to stop")
     except Exception as e:
         logger.error(f"Error stopping translation client: {e}")
         

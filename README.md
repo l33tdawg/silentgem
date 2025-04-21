@@ -115,13 +115,15 @@ When using Ollama, you can:
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
 
-## Chat Insights Feature (v1.2)
+## Chat Insights Feature (v1.1)
 
 SilentGem includes a powerful Chat Insight feature that allows you to query your conversation history in your translated channels:
 
 ### Overview
 
 Chat Insights automatically stores all translated messages in a local database and provides a natural language interface to search and analyze your conversation history through a dedicated Telegram bot.
+
+**Important:** Since SilentGem already stores all messages in your local database, the bot does NOT need to be added to your source channels to search or analyze messages. The bot only needs to be present in channels where you want users to be able to issue commands and receive responses.
 
 #### NEW: Cross-Chat Contextual Analysis
 
@@ -139,7 +141,7 @@ Chat Insights is enabled by default. You can customize its settings with:
 python silentgem.py --setup-insights
 ```
 
-During setup, you'll create a dedicated Telegram bot (via BotFather) that will be automatically added to your target channels.
+During setup, you'll create a dedicated Telegram bot (via BotFather). The bot only needs to be added to channels where you want to issue commands and receive responses, not to the source channels being monitored.
 
 #### Creating a Bot with BotFather
 
@@ -162,11 +164,13 @@ There are two ways to query your conversation history:
 
 #### 1. Using the /askgem Command
 
-In any target channel where the bot is present:
+In any channel where the bot is present:
 
 ```
 /askgem Who talked about APIs yesterday?
 ```
+
+The bot will search all messages stored in your local database, including messages from channels where the bot is not a member.
 
 #### 2. Directly Messaging the Bot
 

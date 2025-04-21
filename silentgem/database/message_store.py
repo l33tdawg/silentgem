@@ -179,15 +179,19 @@ class MessageStore:
             logger.error(f"Error storing message: {e}")
             return None
     
-    def search_messages(self, query=None, chat_id=None, time_period=None, limit=20):
+    def search_messages(self, query=None, chat_id=None, chat_ids=None, sender=None, time_period=None, time_range=None, limit=20, fuzzy=False):
         """
         Search messages in the database
         
         Args:
             query: Text to search for (can include OR operators for complex searches)
-            chat_id: Filter by chat ID (source or target)
+            chat_id: Filter by a single chat ID (source or target)
+            chat_ids: Filter by a list of chat IDs (source or target)
+            sender: Filter by sender name
             time_period: Time period to search in (e.g., "today", "yesterday", "week")
+            time_range: Tuple of (start_time, end_time) as datetime objects
             limit: Maximum number of results to return
+            fuzzy: Whether to use fuzzy matching for the query
             
         Returns:
             list: List of matching messages as dictionaries
@@ -208,6 +212,9 @@ class MessageStore:
             
             # Add content search if query provided
             if query:
+                # Normalize the query - remove extra spaces and lowercase
+                query = ' '.join(query.split()).lower()
+                
                 # Check if we have OR operators in the query
                 if " OR " in query:
                     # Split by OR and create a compound query
@@ -217,25 +224,90 @@ class MessageStore:
                     for term in terms:
                         term = term.strip()
                         if term:
-                            # For each term, create content and entity conditions
-                            term_condition = "(content LIKE ? OR original_content LIKE ? OR id IN (SELECT message_id FROM message_entities WHERE entity_text LIKE ?))"
+                            # For each term, create more flexible conditions:
+                            # 1. Exact match on word boundaries
+                            # 2. Partial match anywhere in content
+                            # 3. Match entity text
+                            # 4. Match in original content
+                            term_condition = '''(
+                                content LIKE ? OR 
+                                content LIKE ? OR 
+                                LOWER(content) LIKE ? OR 
+                                LOWER(original_content) LIKE ? OR 
+                                id IN (SELECT message_id FROM message_entities WHERE LOWER(entity_text) LIKE ?)
+                            )'''
                             or_conditions.append(term_condition)
-                            params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+                            # Word boundary match
+                            params.append(f"% {term} %")  
+                            # Start of content
+                            params.append(f"{term}%")     
+                            # Anywhere in content (lowercase)
+                            params.append(f"%{term.lower()}%")  
+                            # Anywhere in original content
+                            params.append(f"%{term.lower()}%")  
+                            # Entity match
+                            params.append(f"%{term.lower()}%")  
                     
                     if or_conditions:
                         sql += f" AND ({' OR '.join(or_conditions)})"
                 else:
-                    # Simple query without OR operators
-                    sql += " AND (content LIKE ? OR original_content LIKE ? OR id IN (SELECT message_id FROM message_entities WHERE entity_text LIKE ?))"
-                    params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+                    # Simple query without OR operators - use more flexible matching
+                    sql += ''' AND (
+                        content LIKE ? OR 
+                        content LIKE ? OR 
+                        LOWER(content) LIKE ? OR 
+                        LOWER(original_content) LIKE ? OR 
+                        id IN (SELECT message_id FROM message_entities WHERE LOWER(entity_text) LIKE ?)
+                    )'''
+                    # Word boundary match
+                    params.append(f"% {query} %")
+                    # Start of content  
+                    params.append(f"{query}%")
+                    # Anywhere in content (lowercase)
+                    params.append(f"%{query.lower()}%")
+                    # Anywhere in original content
+                    params.append(f"%{query.lower()}%")
+                    # Entity match
+                    params.append(f"%{query.lower()}%")
+                
+                # Special case for single-word queries - also search for words containing the query
+                # This helps with partial word matches like "gaz" matching "gaza"
+                if len(query.split()) == 1 and len(query) > 2:
+                    sql += " OR LOWER(content) LIKE ?"
+                    params.append(f"% {query.lower()}% ")
+                    
+                    # Also try to match the beginning of words
+                    sql += " OR LOWER(content) LIKE ?"
+                    params.append(f"% {query.lower()}%")
             
             # Add chat filter
-            if chat_id:
+            if chat_ids and isinstance(chat_ids, list) and chat_ids:
+                # Handle list of chat IDs
+                placeholders = ', '.join(['?'] * len(chat_ids) * 2)
+                sql += f" AND (source_chat_id IN ({placeholders[:len(chat_ids)]}) OR target_chat_id IN ({placeholders[len(chat_ids)+1:]}))"
+                params.extend(chat_ids + chat_ids)  # Add chat_ids twice for both source and target
+            elif chat_id:
+                # Handle single chat ID
                 sql += " AND (source_chat_id = ? OR target_chat_id = ?)"
                 params.extend([chat_id, chat_id])
             
-            # Add time filter
-            if time_period:
+            # Add sender filter
+            if sender:
+                sql += " AND LOWER(sender_name) LIKE ?"
+                params.append(f"%{sender.lower()}%")
+            
+            # Add time filter based on time_range or time_period
+            if time_range and isinstance(time_range, tuple) and len(time_range) == 2:
+                start_time, end_time = time_range
+                if start_time:
+                    start_timestamp = int(start_time.timestamp())
+                    sql += " AND timestamp >= ?"
+                    params.append(start_timestamp)
+                if end_time:
+                    end_timestamp = int(end_time.timestamp())
+                    sql += " AND timestamp <= ?"
+                    params.append(end_timestamp)
+            elif time_period:
                 current_time = int(time.time())
                 if time_period == "today":
                     # Get timestamp for start of today
@@ -259,6 +331,12 @@ class MessageStore:
                     month_ago = current_time - (30 * 86400)
                     sql += " AND timestamp >= ?"
                     params.append(month_ago)
+            
+            # Add fuzzy matching if requested
+            if fuzzy and query:
+                # Add additional fuzzy conditions
+                sql += " OR LOWER(content) LIKE ? OR LOWER(original_content) LIKE ?"
+                params.extend([f"%{query.lower().replace(' ', '%')}%", f"%{query.lower().replace(' ', '%')}%"])
             
             # Log the constructed query for debugging
             logger.debug(f"Search query: {sql}")
@@ -524,6 +602,63 @@ class MessageStore:
         except Exception as e:
             logger.error(f"Error getting message context: {e}")
             return {'before': [], 'after': []}
+    
+    def get_messages_in_timespan(self, chat_id=None, start_time=None, end_time=None, limit=50):
+        """
+        Get messages within a specific time range
+        
+        Args:
+            chat_id: Chat ID to filter by (optional)
+            start_time: Start timestamp (inclusive)
+            end_time: End timestamp (inclusive)
+            limit: Maximum number of messages to retrieve
+            
+        Returns:
+            list: List of message dictionaries in the specified timespan
+        """
+        try:
+            cursor = self.conn.cursor()
+            params = []
+            
+            query = '''
+            SELECT id, message_id, original_message_id, source_chat_id, target_chat_id,
+                sender_id, sender_name, timestamp, content, original_content,
+                source_language, target_language, is_media, media_type, is_forwarded
+            FROM messages
+            WHERE 1=1
+            '''
+            
+            # Apply chat_id filter if provided
+            if chat_id:
+                query += " AND (source_chat_id = ? OR target_chat_id = ?)"
+                params.extend([chat_id, chat_id])
+            
+            # Apply time range if provided
+            if start_time is not None:
+                query += " AND timestamp >= ?"
+                params.append(start_time)
+                
+            if end_time is not None:
+                query += " AND timestamp <= ?"
+                params.append(end_time)
+            
+            # Order by timestamp and apply limit
+            query += " ORDER BY timestamp ASC LIMIT ?"
+            params.append(limit)
+            
+            # Execute query
+            cursor.execute(query, params)
+            
+            # Convert to list of dictionaries
+            columns = [col[0] for col in cursor.description]
+            messages = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            logger.debug(f"Retrieved {len(messages)} messages in timespan")
+            return messages
+            
+        except Exception as e:
+            logger.error(f"Error getting messages in timespan: {e}")
+            return []
 
 
 # Create a singleton instance

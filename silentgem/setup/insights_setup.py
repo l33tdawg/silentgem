@@ -28,7 +28,8 @@ class InsightsSetup:
         print("\n=== Chat Insights Setup ===")
         print("This will help you set up the Chat Insights feature for SilentGem.")
         print("This feature allows you to query your translation history using natural language.")
-        print("You will need to create a Telegram bot and add it to your target channels.")
+        print("You will need to create a Telegram bot, but adding it to channels is optional.")
+        print("You can simply direct message the bot to search all your stored messages.")
         
         # Check if already configured
         if self.config.is_configured():
@@ -52,10 +53,22 @@ class InsightsSetup:
         await self._setup_response_formatting()
         
         print("\n✅ Chat Insights configuration complete!")
-        print("The bot will now be automatically added to all your target channels.")
+        print("You can now direct message the bot to search and analyze your conversation history.")
         
-        # Add bot to all target channels
-        await self._add_bot_to_channels()
+        # Ask if they want to add the bot to channels
+        add_to_channels = await self._prompt_yes_no(
+            "\nDo you want to add the bot to your target channels? (Not required - you can just direct message the bot)",
+            default=False
+        )
+        
+        if add_to_channels:
+            # Add bot to all target channels
+            await self._add_bot_to_channels()
+        else:
+            print("\nYou've chosen to use direct messages only. To use the bot:")
+            print(f"1. Open Telegram and search for @{self.config.get('bot_username')}")
+            print("2. Start a chat with the bot")
+            print("3. Ask any question about your conversations, e.g. 'What was discussed about APIs yesterday?'")
         
         return True
     
@@ -252,8 +265,13 @@ class InsightsSetup:
         self.config.set("include_sender_info", include_sender_info)
     
     async def _add_bot_to_channels(self):
-        """Add the bot to all target channels"""
-        from silentgem.config import load_mapping
+        """Add the bot to target channels (optional)"""
+        print("\n--- Adding Bot to Target Channels (Optional) ---")
+        print("This step is optional. The bot can search messages from ALL channels")
+        print("even without being added to them, since messages are already stored locally.")
+        print("You're only adding the bot to channels where you want to use commands directly.")
+        
+        from silentgem.mapper import load_mapping
         from silentgem.client import SilentGemClient
         
         # Get the mapping of source chats to target chats
@@ -291,7 +309,7 @@ class InsightsSetup:
                     instructions = f"""
                     📱 **Chat Insights Bot Setup**
                     
-                    To use the chat insights feature, please add @{bot_username} to this chat:
+                    To use the chat insights feature directly in this channel, you can add @{bot_username} (optional):
                     
                     1. Open Telegram and go to this chat
                     2. Tap the chat name at the top
@@ -299,9 +317,12 @@ class InsightsSetup:
                     4. Search for @{bot_username}
                     5. Tap the bot to add it
                     
-                    Once added, you can ask questions about past conversations by:
+                    NOTE: This step is optional. You can always direct message the bot instead. 
+                    The bot can search messages from ALL your channels regardless of whether it's in those channels.
+                    
+                    Once added to a channel, you can ask questions by:
                     - Using the /askgem command followed by your question
-                    - Or just typing your question to the bot
+                    - Or just typing your question to the bot directly
                     
                     Example: `/askgem What was discussed about APIs yesterday?`
                     """
@@ -373,7 +394,9 @@ async def upgrade_existing_channels_for_insights():
     """
     try:
         print("\n=== Upgrading Existing Channels for Chat Insights ===")
-        print("This will check your existing target channels and add the Chat Insights bot to them.")
+        print("This will check your existing target channels. Note that adding the bot")
+        print("to channels is completely optional - you can always direct message the bot")
+        print("to search ALL your messages, even from channels where the bot isn't present.")
         
         # Check if insights is configured
         if not is_insights_configured():
@@ -387,6 +410,13 @@ async def upgrade_existing_channels_for_insights():
         if not bot_username:
             print("\nNo Chat Insights bot configured. Please run --setup-insights first.")
             return False
+        
+        # Ask if they want to add the bot to channels
+        add_to_channels = input("\nDo you want to add the bot to your target channels? (Y/n, not required): ").strip().lower()
+        if add_to_channels and add_to_channels.startswith("n"):
+            print("\nSkipping bot addition to channels. You can still use the bot via direct messages.")
+            print(f"Just search for @{bot_username} on Telegram and start chatting!")
+            return True
             
         # Get all existing mappings
         from silentgem.mapper import ChatMapper
@@ -437,15 +467,16 @@ async def upgrade_existing_channels_for_insights():
             return True
             
         print(f"\nFound {len(channels_to_upgrade)} channels that need to add the Chat Insights bot.")
-        print("To enable Chat Insights in these channels, you need to add the bot manually:")
+        print("Remember, adding the bot to channels is optional. Instructions will be sent, but you")
+        print("can always just use direct messages with the bot instead.")
         
         for channel in channels_to_upgrade:
             print(f"\n📣 Channel: {channel['name']}")
             await insights_bot.add_to_chat(channel['id'])
             
         print("\n✅ Sent instructions to all channels that need to be upgraded.")
-        print("\nIMPORTANT: You need to manually add the bot to each channel following the instructions")
-        print("that were sent to those channels. Chat Insights will only work in channels where the bot is present.")
+        print("\nREMEMBER: Adding the bot to channels is completely optional. You can always")
+        print(f"just direct message @{bot_username} to search all your messages from any channel.")
         
         return True
     

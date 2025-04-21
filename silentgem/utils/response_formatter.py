@@ -4,8 +4,9 @@ Response formatter for formatting search results for display in Telegram
 
 from datetime import datetime
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable
 from loguru import logger
+from collections import defaultdict
 
 from silentgem.translator import create_translator, BaseTranslator
 from silentgem.config.insights_config import get_insights_config
@@ -240,7 +241,7 @@ async def _format_with_llm(
     messages: List[Dict[str, Any]],
     query: str,
     parsed_query: Optional[Dict[str, Any]] = None,
-    translator: Optional[BaseTranslator] = None,
+    translator: Optional[Callable] = None,
     verbosity: str = "standard",
     include_quotes: bool = True,
     include_timestamps: bool = True,
@@ -250,230 +251,190 @@ async def _format_with_llm(
     chat_messages_map: Optional[Dict[str, List[Dict[str, Any]]]] = None
 ) -> str:
     """
-    Format search results using LLM for better summarization and insights
+    Format search results using LLM for improved summarization and insights
     
     Args:
-        messages: List of message dictionaries from the database
-        query: Original query string
-        parsed_query: Parsed query dictionary from NLU
-        translator: Translator instance to use for LLM calls
-        verbosity: Response verbosity (concise, standard, detailed)
-        include_quotes: Whether to include original message quotes
+        messages: List of message dictionaries from search results
+        query: Original search query
+        parsed_query: Parsed query with metadata
+        translator: Optional translation function
+        verbosity: Verbosity level ("concise", "standard", or "detailed")
+        include_quotes: Whether to include quotes in the response
         include_timestamps: Whether to include timestamps
         include_sender_info: Whether to include sender information
-        include_channel_info: Whether to include channel information and links
+        include_channel_info: Whether to include channel information
         context_messages: Additional context messages from the conversation history
         chat_messages_map: Dictionary mapping chat IDs to lists of messages, for better organization
         
     Returns:
-        str: LLM-formatted response
+        Formatted response string
     """
+    if not messages:
+        return _("No messages found matching your query.")
+    
+    # Get LLM client
+    llm_client = get_llm_client()
+    if not llm_client:
+        logger.warning("LLM client not available, falling back to simple formatting")
+        return _format_simple_fallback(messages, query)
+    
     try:
-        # Create translator if not provided
-        if not translator:
-            translator = await create_translator()
-        
-        # Get number of unique chat groups
-        chat_groups = set()
+        # Organize messages by chat group
+        chat_groups = defaultdict(list)
         for msg in messages:
-            source_chat = msg.get('source_chat_id')
-            target_chat = msg.get('target_chat_id')
-            if source_chat:
-                chat_groups.add(source_chat)
-            if target_chat:
-                chat_groups.add(target_chat)
+            chat_id = msg.get("chat_id")
+            if chat_id:
+                # Check for match_type - useful for explaining how the message was found
+                match_type = msg.get("match_type", "direct")
+                matched_term = msg.get("matched_term", query)
+                
+                # Add match info to the message
+                msg["match_info"] = {
+                    "type": match_type,
+                    "term": matched_term
+                }
+                
+                chat_groups[chat_id].append(msg)
         
-        # Format the messages for LLM input
-        formatted_messages = []
+        # Format timestamps based on user preference
+        def format_time(timestamp):
+            if not timestamp:
+                return ""
+            
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp)
+                except ValueError:
+                    try:
+                        timestamp = datetime.fromtimestamp(float(timestamp))
+                    except (ValueError, TypeError):
+                        return timestamp
+            
+            if isinstance(timestamp, (int, float)):
+                timestamp = datetime.fromtimestamp(timestamp)
+                
+            if isinstance(timestamp, datetime):
+                return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            
+            return str(timestamp)
         
-        # Reformat message data for LLM prompt
-        for idx, msg in enumerate(messages):
-            # Format timestamps
-            timestamp = datetime.fromtimestamp(msg.get('timestamp', 0)).strftime('%Y-%m-%d %H:%M:%S')
-            
-            # Get sender info
-            sender = msg.get('sender_name', 'Unknown')
-            
-            # Get channel info - always include for cross-chat awareness
-            source_chat_id = msg.get('source_chat_id', None)
-            target_chat_id = msg.get('target_chat_id', None)
-            
-            chat_id = target_chat_id or source_chat_id
-            chat_info = f"\nChat Group: {chat_id}"
-            
-            # Format message text
-            text = msg.get('content', '').strip()
-            
-            # Combine all information for this message
-            formatted_msg = f"MATCHING MESSAGE {idx + 1}:\n"
-            
-            if include_sender_info:
-                formatted_msg += f"From: {sender}\n"
+        # Build the prompt for the LLM
+        system_prompt = f"""You are a chat message analysis assistant, tasked with summarizing and providing insights from search results.
+
+Search Query: "{query}"
+
+Your task is to analyze messages matching this query and provide a helpful response based on the verbosity level requested:
+- For "concise" responses: Provide a brief 1-2 sentence summary of the key points.
+- For "standard" responses: Provide a balanced summary with key points and limited context.
+- For "detailed" responses: Provide a comprehensive analysis with nuanced insights about the conversation.
+
+Some messages were matched directly with the query terms, while others were found through semantic matching or alternative terms.
+Consider how each message was found when analyzing relevance.
+
+Format your response to be clear, helpful, and informative. Use natural language and don't include message IDs or technical details in your response.
+
+Use bullet points or numbered lists when appropriate for clarity. Reference timestamps and senders if helpful for context."""
+
+        prompt_parts = []
+        prompt_parts.append(f"## Search Query: \"{query}\"")
+        
+        if parsed_query and parsed_query.get("expanded_queries"):
+            expanded_terms = parsed_query.get("expanded_queries", [])
+            prompt_parts.append(f"\n## Expanded Search Terms: {', '.join(expanded_terms)}")
+        
+        # Add matched messages section
+        if chat_groups:
+            prompt_parts.append("\n## Matched Messages:")
+            for chat_id, msgs in chat_groups.items():
+                chat_name = msgs[0].get("chat_title", f"Chat {chat_id}")
+                prompt_parts.append(f"\n### Chat: {chat_name}")
                 
-            if include_timestamps:
-                formatted_msg += f"Date: {timestamp}\n"
-                
-            formatted_msg += chat_info
-            
-            if include_quotes and text:
-                formatted_msg += f"\nContent: {text}"
-                
-            formatted_messages.append(formatted_msg)
-            
-        # Build the LLM prompt
-        prompt = f"""As an advanced Chat Insights assistant, analyze and synthesize information from multiple Telegram chat groups.
-
-USER QUERY: "{query}"
-
-This query returned {len(messages)} matching messages across {len(chat_groups)} different chat groups.
-
-MATCHED MESSAGES:
-{chr(10).join(formatted_messages)}
-
-"""
-
-        # Add context messages if provided
-        if context_messages and len(context_messages) > 0:
-            # Use the chat_messages_map if available for better organization
-            if chat_messages_map and len(chat_messages_map) > 0:
-                # Format context by chat group for clear organization
-                chat_sections = []
-                
-                for chat_id, chat_messages in chat_messages_map.items():
-                    # Sort by timestamp
-                    chat_messages.sort(key=lambda x: x.get('timestamp', 0))
+                for msg in msgs:
+                    # Format message content
+                    content = msg.get("text", "").strip()
+                    if not content:
+                        content = "[Non-text content]"
                     
-                    # Format each conversation thread
-                    thread_messages = []
+                    # Get sender info
+                    sender = msg.get("sender", "Unknown")
                     
-                    # Add header for this chat
-                    thread_header = f"CONTEXT FROM CHAT GROUP {chat_id}:"
-                    thread_messages.append(thread_header)
+                    # Get timestamp
+                    timestamp_str = ""
+                    if include_timestamps and msg.get("timestamp"):
+                        timestamp_str = f" [{format_time(msg.get('timestamp'))}]"
                     
-                    for msg in chat_messages:
-                        # Skip metadata messages
-                        if msg.get('metadata', False):
-                            continue
+                    # Get match info for this message
+                    match_info = f"[Matched via: {msg.get('match_info', {}).get('type', 'direct')}]"
+                    if msg.get('match_info', {}).get('type') == "semantic":
+                        match_info = f"[Matched via semantic term: \"{msg.get('match_info', {}).get('term', query)}\"]"
+                    
+                    # Format the message for the prompt
+                    formatted_msg = f"- **{sender}{timestamp_str}**: {content} {match_info}"
+                    prompt_parts.append(formatted_msg)
+                    
+                    # Add context messages if available
+                    if msg.get("context"):
+                        prompt_parts.append("\n  **Context Messages:**")
+                        for ctx_msg in msg.get("context", [])[:5]:  # Limit to 5 context messages
+                            ctx_content = ctx_msg.get("text", "").strip()
+                            if not ctx_content:
+                                ctx_content = "[Non-text content]"
                             
-                        # Format message content concisely
-                        timestamp = datetime.fromtimestamp(msg.get('timestamp', 0)).strftime('%Y-%m-%d %H:%M')
-                        sender = msg.get('sender_name', 'Unknown')
-                        text = msg.get('content', '').strip()
-                        
-                        # Add concise message
-                        msg_text = f"{timestamp} - {sender}: {text}"
-                        thread_messages.append(msg_text)
-                    
-                    # Only add this section if it has messages
-                    if len(thread_messages) > 1:  # More than just the header
-                        chat_sections.append("\n".join(thread_messages))
-                
-                # Add all chat sections to prompt
-                if chat_sections:
-                    prompt += f"""
-ADDITIONAL CONTEXT FROM MULTIPLE CHAT GROUPS:
-The following messages provide additional context from before and after the matching messages, organized by chat group.
-Use this broad context to understand the bigger picture across different sources of information.
-
-{chr(10).join(chat_sections)}
-
-"""
-            else:
-                # Fall back to simpler context format if chat_messages_map not available
-                # Check for metadata messages
-                metadata_msgs = [msg for msg in context_messages if msg.get('metadata', False)]
-                context_msgs = [msg for msg in context_messages if not msg.get('metadata', False)]
-                
-                # Format context messages
-                formatted_context = []
-                
-                # Add any metadata messages first
-                for meta_msg in metadata_msgs:
-                    formatted_context.append(f"METADATA: {meta_msg.get('content', '')}")
-                
-                # Sort context messages by timestamp
-                context_msgs.sort(key=lambda x: x.get('timestamp', 0))
-                
-                # Format each context message
-                for i, ctx_msg in enumerate(context_msgs[:50]):  # Limit to 50 messages
-                    # Format message content concisely
-                    timestamp = datetime.fromtimestamp(ctx_msg.get('timestamp', 0)).strftime('%Y-%m-%d %H:%M')
-                    sender = ctx_msg.get('sender_name', 'Unknown')
-                    chat_id = ctx_msg.get('source_chat_id') or ctx_msg.get('target_chat_id', 'Unknown')
-                    text = ctx_msg.get('content', '').strip()
-                    
-                    # Add concise message with chat group info
-                    msg_text = f"{timestamp} - {sender} [Chat: {chat_id}]: {text}"
-                    formatted_context.append(msg_text)
-                
-                # Add context section to prompt
-                if formatted_context:
-                    prompt += f"""
-ADDITIONAL CONTEXT FROM MULTIPLE CHAT GROUPS:
-The following messages provide additional context from before and after the matching messages.
-These are from various chat groups that may contain relevant information.
-
-{chr(10).join(formatted_context)}
-
-"""
-
+                            ctx_sender = ctx_msg.get("sender", "Unknown")
+                            
+                            ctx_timestamp_str = ""
+                            if include_timestamps and ctx_msg.get("timestamp"):
+                                ctx_timestamp_str = f" [{format_time(ctx_msg.get('timestamp'))}]"
+                            
+                            ctx_formatted = f"  - **{ctx_sender}{ctx_timestamp_str}**: {ctx_content}"
+                            prompt_parts.append(ctx_formatted)
+                        prompt_parts.append("")  # Add an empty line after context
+        
         # Add instructions based on verbosity
+        prompt_parts.append("\n## Instructions:")
+        
         if verbosity == "concise":
-            prompt += """
-INSTRUCTIONS:
-1. Create a VERY BRIEF summary (2-3 sentences maximum) of the information found.
-2. Focus on directly answering the query with facts from the messages.
-3. If information comes from multiple chat groups, synthesize it to provide a unified answer.
-4. Consider the temporal relationships between messages across different groups.
-5. Keep your response extremely concise.
-6. DO NOT mention the search process or message numbers in your response.
-"""
+            prompt_parts.append("Provide a very brief 1-2 sentence summary of the key points from these messages. Focus only on the most important information directly relevant to the query.")
+        
         elif verbosity == "detailed":
-            prompt += """
-INSTRUCTIONS:
-1. Provide a comprehensive analysis of the information found across all chat groups.
-2. Begin with a clear executive summary answering the original query.
-3. Analyze patterns, connections, and contrasting information between different chat groups.
-4. Identify key insights that emerge when considering all sources together.
-5. Highlight temporal relationships and potential cause-effect patterns across chats.
-6. Format your response in a well-structured way with clear sections.
-7. If relevant, note differences in how the topic is discussed across different groups.
-8. Make it clear when you're drawing connections across multiple sources.
-9. End with the most significant conclusion supported by messages across all groups.
-"""
-        else:  # standard
-            prompt += """
-INSTRUCTIONS:
-1. Provide a clear summary that directly answers the query (3-5 sentences).
-2. Synthesize information from all relevant chat groups to provide a unified understanding.
-3. Highlight any significant patterns or differences in how information appears across different groups.
-4. Focus on making connections between related information from different sources.
-5. Present a cohesive narrative that shows the bigger picture across all messages.
-6. Keep the response focused and relevant to the query.
-7. DO NOT mention message numbers or the search process in your response.
-"""
-
-        # Get response from LLM
-        response = await translator.translate(prompt, max_tokens=1024)
+            prompt_parts.append("""Provide a comprehensive analysis of these search results, including:
+1. A detailed summary of the key information found
+2. Analysis of how the messages relate to each other and the search query
+3. Any insights or patterns you notice in the conversation
+4. Consider how some messages were found through semantic matching and evaluate their relevance
+5. Mention specific details from the most relevant messages
+""")
         
-        # Clean up the response if needed
-        response = response.strip()
+        else:  # standard verbosity
+            prompt_parts.append("""Provide a balanced summary of these search results, including:
+1. The key points relevant to the search query
+2. Important context that helps understand the conversation
+3. Brief mention of how messages were matched (direct or semantic)
+4. Be concise while still covering the important information
+""")
         
-        return response
+        # Build the final prompt
+        user_prompt = "\n".join(prompt_parts)
+        
+        # Send to LLM
+        response = llm_client.chat_completion([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ], model="gpt-3.5-turbo-16k", temperature=0.3, max_tokens=1024)
+        
+        if not response or not response.get("content"):
+            logger.warning("Empty response from LLM, falling back to simple formatting")
+            return _format_simple_fallback(messages, query)
+        
+        llm_response = response.get("content", "").strip()
+        
+        # Add citation footer
+        footer = _("\n\nResults generated by SilentGem using AI-powered summarization.")
+        return llm_response + footer
         
     except Exception as e:
-        logger.error(f"Error formatting with LLM: {e}")
-        # Fall back to basic formatting
-        return _format_basic(
-            messages=messages,
-            query=query,
-            parsed_query=parsed_query,
-            verbosity=verbosity,
-            include_quotes=include_quotes,
-            include_timestamps=include_timestamps,
-            include_sender_info=include_sender_info,
-            include_channel_info=include_channel_info
-        )
+        logger.error(f"Error formatting with LLM: {e}", exc_info=True)
+        return _format_simple_fallback(messages, query)
 
 def _format_simple_fallback(messages: List[Dict[str, Any]], query: str) -> str:
     """

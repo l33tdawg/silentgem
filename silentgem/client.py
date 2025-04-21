@@ -35,8 +35,9 @@ class SilentGemClient:
         
         print(f"🔧 Initializing translator (using {LLM_ENGINE})...")
         try:
-            self.translator = create_translator()
-            print("✅ Translator initialized successfully")
+            # Initialize translator with await since create_translator is now async
+            self.translator = None  # Will be initialized in start()
+            print("✅ Translator initialization will be completed during startup")
         except Exception as e:
             print(f"❌ Failed to initialize translator: {e}")
             import traceback
@@ -57,6 +58,16 @@ class SilentGemClient:
     
     async def start(self):
         """Start the client and register handlers"""
+        # Initialize translator if not already done
+        if self.translator is None:
+            try:
+                self.translator = await create_translator()
+                print("✅ Translator initialized successfully")
+            except Exception as e:
+                print(f"❌ Failed to initialize translator: {e}")
+                logger.error(f"Error initializing translator: {e}")
+                raise
+
         # Load the chat mapping
         self.chat_mapping = self.mapper.get_all()
         if not self.chat_mapping:

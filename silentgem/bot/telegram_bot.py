@@ -35,6 +35,9 @@ class InsightsBot:
         
         # Reference to the command handler (will be set later)
         self.command_handler = None
+        
+        # Shutdown event
+        self.shutdown_event = asyncio.Event()
     
     async def start(self):
         """Start the bot"""
@@ -56,6 +59,10 @@ class InsightsBot:
                 bot_token=self.token,
                 workdir="sessions"
             )
+            
+            # Initialize command handler with bot reference
+            from silentgem.bot.command_handler import get_command_handler
+            self.command_handler = get_command_handler(bot=self.bot, shutdown_event=self.shutdown_event)
             
             # Register message handlers
             self._register_handlers()

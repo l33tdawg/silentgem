@@ -5,180 +5,224 @@ Command handler for processing user queries in the Chat Insights bot
 import asyncio
 from loguru import logger
 
-from silentgem.search.query_processor import QueryProcessor
+from silentgem.search.query_processor import get_query_processor
 from silentgem.utils.response_formatter import format_search_results
 from silentgem.database.message_store import get_message_store
 from silentgem.config.insights_config import get_insights_config
+from silentgem.search.search_engine import get_search_engine
 
 class CommandHandler:
     """Handles commands and queries for the Chat Insights bot"""
     
-    def __init__(self):
+    def __init__(self, bot=None, shutdown_event=None):
         """Initialize the command handler"""
         self.message_store = get_message_store()
         self.config = get_insights_config()
-        self.query_processor = QueryProcessor()
+        self.query_processor = get_query_processor()
+        self.bot = bot
+        self.shutdown_event = shutdown_event or asyncio.Event()
     
-    async def handle_query(self, query_text, chat_id, user=None, verbosity="standard"):
+    async def handle_query(self, 
+                    query=None, 
+                    query_text=None, 
+                    user_id=None, 
+                    user=None, 
+                    chat_id=None, 
+                    message_id=None, 
+                    reply_to_message_id=None, 
+                    callback=None,
+                    verbosity=None):
         """
-        Handle a query from a user
+        Handle a natural language query from a user
         
         Args:
-            query_text: The raw query text from the user
-            chat_id: The ID of the chat where the query was sent
-            user: User object or dict with information about the sender
-            verbosity: Response verbosity (concise, standard, detailed)
+            query: The text query from the user (legacy parameter)
+            query_text: The text query from the user (new parameter)
+            user_id: Telegram user ID (legacy parameter)
+            user: Telegram User object (new parameter)
+            chat_id: Telegram chat ID
+            message_id: Message ID that triggered the command (optional)
+            reply_to_message_id: Message ID to reply to (optional)
+            callback: Function to call with response (optional)
+            verbosity: Response verbosity level (optional)
             
         Returns:
-            str: The formatted response to send back to the user
+            None
         """
         try:
-            # Send typing action while processing
-            if chat_id:
-                await self._send_typing_action(chat_id)
+            # Handle parameter compatibility
+            query = query_text or query
+            if user and not user_id:
+                user_id = user.id
+            
+            # Use the configured verbosity if none specified
+            if not verbosity:
+                verbosity = self.config.get("verbosity", "standard")
+            
+            # Check if shutting down
+            if self.shutdown_event.is_set():
+                logger.info("Ignoring query - shutdown in progress")
+                return
+            
+            # Send typing indicator if bot is available
+            if self.bot:
+                try:
+                    await self.bot.send_chat_action(chat_id, 'typing')
+                except Exception as e:
+                    logger.warning(f"Error sending typing action: {e}")
+            
+            # Process query with NLU
+            processed_query = await self.query_processor.process_query(query)
+            
+            if not processed_query or not isinstance(processed_query, dict):
+                logger.error("Failed to process query")
+                await callback(chat_id, "❌ Sorry, I had trouble understanding your query. Please try rephrasing.")
+                return
+            
+            # Extract parameters from processed query
+            query_text = processed_query.get("query_text") or query
+            time_period = processed_query.get("time_period")
+            sender = processed_query.get("sender")
+            intent = processed_query.get("intent", "search")
+            
+            logger.info(f"Processed query - Intent: {intent}, Time: {time_period}, Query: {query_text}")
+            
+            # Send intermediate message for long-running searches
+            intermediate_msg = None
+            if callback:
+                if intent == "search":
+                    intermediate_txt = f"🔍 Searching for information about '{query}'..."
+                elif intent == "summarize":
+                    intermediate_txt = f"📊 Analyzing conversations about '{query}'..."
+                elif intent == "analyze":
+                    intermediate_txt = f"🧠 Performing deep analysis on '{query}'..."
+                else:
+                    intermediate_txt = f"⏳ Processing your request about '{query}'..."
+                    
+                intermediate_msg = await callback(chat_id, intermediate_txt)
+            
+            # Execute search
+            search_engine = get_search_engine()
+            
+            # Get verbosity setting from config for context collection
+            collect_extensive_context = verbosity in ["standard", "detailed"]
+            
+            # Determine strategies based on query and search settings
+            strategies = processed_query.get("search_strategies", ["direct", "semantic"])
+            
+            # Set time limits based on time_period
+            time_limit = None
+            if time_period:
+                # Convert time period to actual datetime range
+                from datetime import datetime, timedelta
+                now = datetime.now()
                 
-            # Log the query
-            if user:
-                user_id = user.get("id", None) if isinstance(user, dict) else getattr(user, "id", None)
-                user_name = user.get("name", None) if isinstance(user, dict) else getattr(user, "first_name", None)
-                logger.info(f"Query from user {user_id} ({user_name}): {query_text}")
-            else:
-                logger.info(f"Query from unknown user: {query_text}")
+                if time_period == "today":
+                    start_time = now - timedelta(days=1)
+                elif time_period == "yesterday":
+                    start_time = now - timedelta(days=2)
+                    end_time = now - timedelta(days=1)
+                elif time_period == "week":
+                    start_time = now - timedelta(days=7)
+                elif time_period == "month":
+                    start_time = now - timedelta(days=30)
+                else:
+                    start_time = None
+                    
+                if time_period != "yesterday":
+                    end_time = now
+                    
+                if start_time:
+                    time_limit = (start_time, end_time)
             
-            # Process the query
-            query_processor = QueryProcessor()
-            parsed_query = await query_processor.process_query(query_text)
-            
-            if not parsed_query:
-                logger.warning(f"Failed to parse query: {query_text}")
-                return "I'm sorry, I had trouble understanding your query. Could you please rephrase it?"
-            
-            # Search messages
-            query_text_for_search = parsed_query.get("query_text", query_text)
-            time_period = parsed_query.get("time_period", None)
-            
-            # Log the processed query
-            logger.info(f"Processed query: {query_text_for_search}, time period: {time_period}")
-            
-            # Search for messages - this will search across all channels the bot has access to
-            search_results = self.message_store.search_messages(
-                query=query_text_for_search, 
-                time_period=time_period,
-                limit=30  # Increased limit to get more matches across channels
+            # Search with enhanced parameters
+            messages, metadata = await search_engine.search(
+                query=query_text,
+                sender=sender,
+                max_results=50 if verbosity == "detailed" else 30,
+                collect_context=collect_extensive_context,
+                max_context_per_message=10 if verbosity == "concise" else 20,
+                time_limit=time_limit,
+                strategies=strategies,
+                parsed_query=processed_query
             )
             
-            # Enhanced strategy for context retrieval
-            # 1. Get more context for each search result (across channels)
-            # 2. Gather additional messages related to the topic but didn't match the exact search
-            all_context_messages = []
-            chat_messages_map = {}  # Group messages by chat for better organization
-            
-            if search_results:
-                # Set context window size - larger context window
-                before_count = 15
-                after_count = 15
+            # If no results, try fallback strategies
+            if not messages:
+                logger.info(f"No results with primary strategy, trying fallback approach")
                 
-                # Track which chats had matching messages
-                matching_chats = set()
-                for result in search_results:
-                    source_chat = result.get('source_chat_id')
-                    target_chat = result.get('target_chat_id')
-                    if source_chat:
-                        matching_chats.add(source_chat)
-                    if target_chat:
-                        matching_chats.add(target_chat)
-                
-                # For each search result, get context from all chats
-                for result in search_results:
-                    # Get context for this message with cross-chat context enabled
-                    context = self.message_store.get_message_context(
-                        message_id=result['id'],
-                        source_chat_id=None,  # No chat filter - get context across all channels
-                        before_count=before_count,
-                        after_count=after_count,
-                        cross_chat_context=True
+                # Try with original query if processed query is different
+                if processed_query.get("original_query") != query_text:
+                    messages, metadata = await search_engine.search(
+                        query=processed_query.get("original_query", query),
+                        sender=sender,
+                        max_results=50 if verbosity == "detailed" else 30,
+                        collect_context=collect_extensive_context,
+                        max_context_per_message=10 if verbosity == "concise" else 20,
+                        time_limit=time_limit,
+                        strategies=["direct", "fuzzy"],  # Use direct and fuzzy as fallback
                     )
-                    
-                    # Add these to our full context list
-                    # Only add messages that aren't already in our results or context
-                    for msg in context['before'] + context['after']:
-                        if msg['id'] not in [m['id'] for m in search_results] and \
-                           msg['id'] not in [m['id'] for m in all_context_messages]:
-                            all_context_messages.append(msg)
-                            
-                            # Also track by chat for better organization
-                            chat_id_key = msg.get('source_chat_id') or msg.get('target_chat_id')
-                            if chat_id_key not in chat_messages_map:
-                                chat_messages_map[chat_id_key] = []
-                            chat_messages_map[chat_id_key].append(msg)
-                
-                # Perform a second search for related messages if there aren't enough context messages
-                if len(all_context_messages) < 20 and parsed_query.get("search_alternatives"):
-                    # Try to find related messages using alternative search terms
-                    alternatives = parsed_query.get("search_alternatives", [])
-                    if alternatives and isinstance(alternatives, list):
-                        # Take the first 2 alternative search terms
-                        for alt_term in alternatives[:2]:
-                            if alt_term and isinstance(alt_term, str):
-                                alt_results = self.message_store.search_messages(
-                                    query=alt_term,
-                                    time_period=time_period,
-                                    limit=10
-                                )
-                                
-                                # Add any new messages to our context
-                                for msg in alt_results:
-                                    if msg['id'] not in [m['id'] for m in search_results] and \
-                                       msg['id'] not in [m['id'] for m in all_context_messages]:
-                                        all_context_messages.append(msg)
-                                        
-                                        # Also track by chat
-                                        chat_id_key = msg.get('source_chat_id') or msg.get('target_chat_id')
-                                        if chat_id_key not in chat_messages_map:
-                                            chat_messages_map[chat_id_key] = []
-                                        chat_messages_map[chat_id_key].append(msg)
-                
-                # Add a special metadata message containing chat information to help the LLM understand the context
-                if matching_chats:
-                    metadata_msg = {
-                        "id": -1,  # Special ID to indicate metadata
-                        "metadata": True,
-                        "content": f"This search found messages across {len(matching_chats)} different chat groups."
-                    }
-                    all_context_messages.append(metadata_msg)
-                
-                # Sort all context messages by timestamp
-                all_context_messages.sort(key=lambda x: x.get('timestamp', 0) if not x.get('metadata', False) else 0)
-                logger.info(f"Added {len(all_context_messages)} context messages to the {len(search_results)} search results from {len(chat_messages_map)} different chats")
             
-            # Format the response
-            if search_results:
-                response = await format_search_results(
-                    messages=search_results,
-                    query=query_text,
-                    parsed_query=parsed_query,
+            # If we have results, format and send them
+            if messages:
+                # Format search results with enhanced context
+                formatted_results = await format_search_results(
+                    messages=messages, 
+                    query=query, 
+                    parsed_query=processed_query, 
                     verbosity=verbosity,
-                    context_messages=all_context_messages,
-                    chat_messages_map=chat_messages_map  # Pass the chat grouping for better context organization
+                    include_quotes=(verbosity != "concise"),
+                    include_timestamps=True,
+                    include_sender_info=True,
+                    include_channel_info=True,
                 )
-            elif parsed_query:
-                # No results but parsed query
-                logger.info(f"No messages found for query: {query_text_for_search}")
-                response = await format_search_results(
-                    messages=[],
-                    query=query_text,
-                    parsed_query=parsed_query
-                )
+                
+                # Send the response
+                if callback:
+                    await callback(chat_id, formatted_results)
+                else:
+                    return formatted_results
+                
+                # If this was a successful search and we have an intermediate message ID, delete it
+                if intermediate_msg and hasattr(intermediate_msg, 'message_id') and self.bot:
+                    try:
+                        await self.bot.delete_messages(chat_id, intermediate_msg.message_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete intermediate message: {e}")
             else:
-                # No results and couldn't parse query
-                logger.warning(f"Failed to parse query: {query_text}")
-                response = "I didn't find any messages matching your query. Could you try rephrasing or using different keywords?"
-            
-            return response
-            
+                # No results
+                no_results_message = f"📭 No messages found matching your query: '{query}'"
+                
+                # Add some helpful context if available
+                if "expanded_terms" in processed_query and processed_query["expanded_terms"]:
+                    expanded_terms = processed_query["expanded_terms"]
+                    no_results_message += "\n\nTry searching for these related terms:"
+                    for term in expanded_terms[:3]:
+                        no_results_message += f"\n• {term}"
+                elif "search_alternatives" in processed_query and processed_query["search_alternatives"]:
+                    alt_terms = processed_query["search_alternatives"]
+                    no_results_message += "\n\nYou might want to try these alternative search terms:"
+                    for term in alt_terms[:3]:
+                        no_results_message += f"\n• {term}"
+                
+                if callback:
+                    await callback(chat_id, no_results_message)
+                else:
+                    return no_results_message
+                
+                # If this was an unsuccessful search and we have an intermediate message ID, delete it
+                if intermediate_msg and hasattr(intermediate_msg, 'message_id') and self.bot:
+                    try:
+                        await self.bot.delete_messages(chat_id, intermediate_msg.message_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to delete intermediate message: {e}")
+        
         except Exception as e:
             logger.error(f"Error handling query: {e}")
-            return "I'm sorry, I encountered an error while processing your query. Please try again later."
+            if callback:
+                await callback(chat_id, f"❌ Sorry, something went wrong while processing your query. Error: {str(e)}")
+            else:
+                return f"❌ Error: {str(e)}"
 
     async def _send_typing_action(self, chat_id):
         """
@@ -195,9 +239,9 @@ class CommandHandler:
 # Singleton instance
 _instance = None
 
-def get_command_handler():
+def get_command_handler(bot=None, shutdown_event=None):
     """Get the command handler singleton instance"""
     global _instance
     if _instance is None:
-        _instance = CommandHandler()
+        _instance = CommandHandler(bot, shutdown_event)
     return _instance 
