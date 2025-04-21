@@ -24,7 +24,7 @@ class SilentGemClient:
     
     def __init__(self):
         """Initialize the client and translator"""
-        print("\n🔧 Initializing SilentGem client...")
+        print("🔧 Initializing SilentGem client...")
         self.client = Client(
             SESSION_NAME,
             api_id=API_ID,
@@ -61,11 +61,11 @@ class SilentGemClient:
         self.chat_mapping = self.mapper.get_all()
         if not self.chat_mapping:
             logger.warning("No chat mappings loaded, the bot won't translate any messages")
-            print("\n⚠️ WARNING: No chat mappings found. The translator won't process any messages.")
+            print("⚠️ WARNING: No chat mappings found. The translator won't process any messages.")
             print("Please set up chat mappings first using the setup wizard or option 3 in the main menu.")
         else:
             logger.info(f"Loaded {len(self.chat_mapping)} chat mappings")
-            print(f"\n✅ Loaded {len(self.chat_mapping)} chat mappings")
+            print(f"✅ Loaded {len(self.chat_mapping)} chat mappings")
             print("Monitoring the following source chats:")
             for source_id in self.chat_mapping.keys():
                 print(f" - Chat ID: {source_id} → Target: {self.chat_mapping[source_id]}")
@@ -74,14 +74,14 @@ class SilentGemClient:
         @self.client.on_disconnect()
         async def on_disconnect(client):
             logger.warning("Client disconnected. Will attempt to reconnect.")
-            print("\n⚠️ Telegram client disconnected. Attempting to reconnect...")
+            print("⚠️ Telegram client disconnected. Attempting to reconnect...")
         
         # Start the client with error handling
         try:
             await self.client.start()
             me = await self.client.get_me()
             logger.info(f"Started as {me.first_name} ({me.id})")
-            print(f"\n✅ Connected to Telegram as {me.first_name} ({me.id})")
+            print(f"✅ Connected to Telegram as {me.first_name} ({me.id})")
             print("Waiting for messages to translate... (Press Ctrl+C to stop)")
             
             # Start heartbeat to show the client is alive
@@ -106,7 +106,7 @@ class SilentGemClient:
             @self.client.on_message(filters.chat(chat_ids_to_monitor))
             async def on_message(client, message):
                 try:
-                    print(f"\n📩 Received message from chat {message.chat.id} ({message.chat.title if hasattr(message.chat, 'title') else 'Private'})")
+                    print(f"📩 Received message from chat {message.chat.id} ({message.chat.title if hasattr(message.chat, 'title') else 'Private'})")
                     print(f"💬 Message content: {message.text or message.caption or '[No text content]'}")
                     print(f"🔗 Chat mapping for this chat: {self.chat_mapping.get(str(message.chat.id), 'Not found')}")
                     
@@ -666,7 +666,7 @@ class SilentGemClient:
     async def stop(self):
         """Stop the client"""
         logger.info("Stopping SilentGem client...")
-        print("\n🛑 Stopping SilentGem client...")
+        print("🛑 Stopping SilentGem client...")
         
         # Cancel all pending tasks
         for task_name, task in list(self._tasks.items()):
@@ -679,7 +679,7 @@ class SilentGemClient:
                     pass
         
         self._tasks.clear()
-        
+
         try:
             # Stop the client
             if self.client.is_connected:
@@ -688,6 +688,14 @@ class SilentGemClient:
                 print("✅ Client stopped successfully")
             else:
                 logger.info("Client was not running, nothing to stop")
+                try:
+                    await self.client.stop()
+                    logger.info("Client stopped successfully")
+                    print("✅ Client stopped successfully")
+                except Exception as e:
+                    logger.error(f"Error stopping client: {e}")
+                    print(f"❌ Error stopping client: {e}")
+        
         except Exception as e:
             logger.error(f"Error stopping client: {e}")
             print(f"❌ Error stopping client: {e}")
@@ -714,7 +722,7 @@ class SilentGemClient:
             while hasattr(self, '_running') and self._running:
                 await asyncio.sleep(60)  # Every minute
                 count += 1
-                print(f"\n💓 Heartbeat #{count}: SilentGem is running and listening for messages")
+                print(f"💓 Heartbeat #{count}: SilentGem is running and listening for messages")
                 
                 # Every 5 minutes, print chat mappings to verify they're still correct
                 if count % 5 == 0:
@@ -749,7 +757,7 @@ class SilentGemClient:
                 print("💤 Message sync cancelled - shutdown in progress")
                 return
                 
-            print("\n🔄 Checking for missed messages since last run...")
+            print("🔄 Checking for missed messages since last run...")
             
             for source_id in self.chat_mapping.keys():
                 # Check for shutdown in each iteration
@@ -835,7 +843,7 @@ class SilentGemClient:
                 print("💤 Message polling cancelled - shutdown in progress")
                 return
                 
-            print("\n🔄 Starting active message polling as a fallback mechanism...")
+            print("🔄 Starting active message polling as a fallback mechanism...")
             
             # Track last time we received a message through the event handler
             # Initialize with a property if it doesn't exist
@@ -850,7 +858,7 @@ class SilentGemClient:
             while hasattr(self, '_running') and self._running:
                 poll_count += 1
                 if poll_count % 10 == 0:  # Only log every 10 polls to reduce spam
-                    print(f"\n🔄 Active polling cycle #{poll_count}")
+                    print(f"🔄 Active polling cycle #{poll_count}")
                 
                 # Check if we've received messages through event handlers recently
                 # If yes, we can poll less frequently
@@ -892,7 +900,7 @@ class SilentGemClient:
                         
                         # Process new messages in chronological order (oldest first)
                         if new_messages:
-                            print(f"\n✅ Found {len(new_messages)} new messages in chat {source_id}")
+                            print(f"✅ Found {len(new_messages)} new messages in chat {source_id}")
                             new_messages.reverse()  # Reverse to process oldest first
                             
                             for msg in new_messages:

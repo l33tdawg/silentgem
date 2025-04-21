@@ -152,25 +152,25 @@ def signal_handler(sig, frame):
         print("\n⚠️ Force shutdown requested... Returning to menu after cleanup")
         force_shutdown_requested = True
         menu_return_requested = True
-    
-    if shutdown_timer:
-        shutdown_timer.cancel()
-    
-    # Count the number of times we've been interrupted during shutdown
-    if not hasattr(signal_handler, 'interrupt_count'):
-        signal_handler.interrupt_count = 1
-    else:
-        signal_handler.interrupt_count += 1
-    
-    # After the second interrupt (not third), just exit completely
-    if signal_handler.interrupt_count >= 2:
-        print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
-        # Call cleanup before hard exit
-        try:
-            asyncio.run(cleanup())
-        except:
-            pass  # Ignore any errors during emergency cleanup
-        sys.exit(0)  # Force immediate exit
+        
+        if shutdown_timer:
+            shutdown_timer.cancel()
+            
+        # Count the number of times we've been interrupted during shutdown
+        if not hasattr(signal_handler, 'interrupt_count'):
+            signal_handler.interrupt_count = 1
+        else:
+            signal_handler.interrupt_count += 1
+            
+        # After the second interrupt (not third), just exit completely
+        if signal_handler.interrupt_count >= 2:
+            print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
+            # Call cleanup before hard exit
+            try:
+                asyncio.run(cleanup())
+            except:
+                pass  # Ignore any errors during emergency cleanup
+            sys.exit(0)  # Force immediate exit
     
     # First Ctrl+C, try graceful shutdown with timeout
     print("\n🛑 Received exit signal. Shutting down gracefully...")
@@ -1606,7 +1606,7 @@ def init_data_directory():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        asyncio.run(main()) 
     except KeyboardInterrupt:
         # Handle keyboard interrupt
         print("\nShutting down SilentGem...")

@@ -119,7 +119,7 @@ def get_insights_config():
     global _instance
     if _instance is None:
         _instance = InsightsConfig()
-    return _instance
+    return _instance 
 
 def is_insights_configured():
     """Check if the insights feature is properly configured"""
