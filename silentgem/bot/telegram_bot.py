@@ -174,6 +174,24 @@ class InsightsBot:
         @self.bot.on_message(filters.text & (~filters.command("")))
         async def message_handler(client, message):
             """Handle regular messages as queries"""
+            # Ignore translated messages and other SilentGem outputs
+            if message.text:
+                # Skip processing various SilentGem outputs
+                silentgem_patterns = [
+                    "🔄 Translated from", 
+                    "📷 Photo from",
+                    "🎥 Video from",
+                    "📎 Document from",
+                    "🎬 Animation from",
+                    "🎭 Sticker from",
+                    "🔠 Original (English) from"
+                ]
+                
+                for pattern in silentgem_patterns:
+                    if message.text.startswith(pattern):
+                        # Skip processing SilentGem generated messages
+                        return
+                
             # Ignore messages in groups unless directly mentioned
             if message.chat.type in ["group", "supergroup"]:
                 # Check if the bot was mentioned or replied to
