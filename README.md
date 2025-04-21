@@ -177,6 +177,8 @@ Chat Insights understands natural language queries. Examples:
 - "What did Alice say about the database?"
 - "Show discussions about the UI redesign"
 
+You can ask these questions in any target channel where the bot is present or in a direct message to the bot. The bot will search across all your channels and provide clickable links to the original messages.
+
 ### Privacy and Security
 
 Your messages are stored locally on your system. You can configure:

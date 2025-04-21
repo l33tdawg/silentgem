@@ -17,7 +17,8 @@ async def format_search_results(
     verbosity: str = "standard",
     include_quotes: bool = True,
     include_timestamps: bool = True,
-    include_sender_info: bool = True
+    include_sender_info: bool = True,
+    include_channel_info: bool = False
 ) -> str:
     """
     Format search results for display in Telegram
@@ -30,6 +31,7 @@ async def format_search_results(
         include_quotes: Whether to include original message quotes
         include_timestamps: Whether to include timestamps
         include_sender_info: Whether to include sender information
+        include_channel_info: Whether to include channel information and links
         
     Returns:
         str: Formatted response
@@ -59,7 +61,8 @@ async def format_search_results(
                 verbosity=verbosity,
                 include_quotes=include_quotes,
                 include_timestamps=include_timestamps,
-                include_sender_info=include_sender_info
+                include_sender_info=include_sender_info,
+                include_channel_info=include_channel_info
             )
         
         # Otherwise, use basic formatting
@@ -70,7 +73,8 @@ async def format_search_results(
             verbosity=verbosity,
             include_quotes=include_quotes,
             include_timestamps=include_timestamps,
-            include_sender_info=include_sender_info
+            include_sender_info=include_sender_info,
+            include_channel_info=include_channel_info
         )
     
     except Exception as e:
@@ -85,7 +89,8 @@ def _format_basic(
     verbosity: str = "standard",
     include_quotes: bool = True,
     include_timestamps: bool = True,
-    include_sender_info: bool = True
+    include_sender_info: bool = True,
+    include_channel_info: bool = False
 ) -> str:
     """
     Basic formatter without using LLM
@@ -135,6 +140,11 @@ def _format_basic(
             
         message_lines = []
         
+        # Add channel info if requested
+        if include_channel_info and msg.get("target_chat_id"):
+            chat_title = f"Channel ID: {msg['target_chat_id']}"
+            message_lines.append(f"📢 {chat_title}")
+        
         # Add sender info
         if include_sender_info and msg.get("sender_name"):
             message_lines.append(f"👤 {msg['sender_name']}")
@@ -167,6 +177,12 @@ def _format_basic(
         else:
             message_lines.append("[No text content]")
         
+        # Add message link if possible
+        if include_channel_info and msg.get("target_chat_id") and msg.get("message_id"):
+            # Create a tg:// link that will work in Telegram
+            link = f"tg://privatepost?channel={msg['target_chat_id'].replace('-100', '')}&post={msg['message_id']}"
+            message_lines.append(f"🔗 [View Message]({link})")
+        
         # Add to response
         response.append("\n".join(message_lines))
         
@@ -188,7 +204,8 @@ async def _format_with_llm(
     verbosity: str = "standard",
     include_quotes: bool = True,
     include_timestamps: bool = True,
-    include_sender_info: bool = True
+    include_sender_info: bool = True,
+    include_channel_info: bool = False
 ) -> str:
     """
     Format search results using the LLM for natural language summarization
@@ -214,6 +231,10 @@ I found {len(messages)} messages matching this query. Here are the details for t
         # Add message details to prompt
         for i, msg in enumerate(messages[:max_messages]):
             prompt += f"MESSAGE {i+1}:\n"
+            
+            if include_channel_info and msg.get("target_chat_id"):
+                chat_title = f"Channel ID: {msg['target_chat_id']}"
+                prompt += f"Channel: {chat_title}\n"
             
             if include_sender_info and msg.get("sender_name"):
                 prompt += f"From: {msg['sender_name']}\n"
@@ -281,7 +302,8 @@ Feel free to use formatting like bullet points and sections to enhance readabili
                 verbosity=verbosity,
                 include_quotes=include_quotes,
                 include_timestamps=include_timestamps,
-                include_sender_info=include_sender_info
+                include_sender_info=include_sender_info,
+                include_channel_info=include_channel_info
             )
     
     except Exception as e:

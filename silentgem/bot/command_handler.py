@@ -31,19 +31,19 @@ class CommandHandler:
             # Send typing action while processing
             await message.chat.send_action("typing")
             
-            # Get the chat ID to filter searches
-            chat_id = str(message.chat.id)
+            # Get the chat ID of the current chat (for reference)
+            current_chat_id = str(message.chat.id)
             
-            logger.info(f"Processing query: '{query_text}' in chat {chat_id}")
+            logger.info(f"Processing query: '{query_text}' from chat {current_chat_id}")
             
             # Process query and extract search parameters
             parsed_query = await self.query_processor.process_query(query_text)
             
             if parsed_query:
-                # Use parsed parameters to search messages
+                # Use parsed parameters to search messages across ALL channels
                 search_results = self.message_store.search_messages(
                     query=parsed_query.get("query_text"),
-                    chat_id=chat_id,  # Always filter by current chat
+                    chat_id=None,  # No chat filter - search across all channels
                     time_period=parsed_query.get("time_period"),
                     limit=20
                 )
@@ -65,7 +65,8 @@ class CommandHandler:
                         verbosity=response_verbosity,
                         include_quotes=include_quotes,
                         include_timestamps=include_timestamps,
-                        include_sender_info=include_sender_info
+                        include_sender_info=include_sender_info,
+                        include_channel_info=True  # Add channel information
                     )
                     
                     # Send response
