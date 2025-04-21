@@ -20,7 +20,7 @@ import threading
 from colorama import Fore, Style
 
 from silentgem.config import validate_config, MAPPING_FILE, API_ID, API_HASH, GEMINI_API_KEY, SESSION_NAME
-from silentgem.client import SilentGemClient
+from silentgem.client import SilentGemClient, get_client
 from silentgem.utils import ensure_dir_exists, get_chat_info
 from silentgem.setup import setup_wizard, config_llm_settings, config_target_language
 from silentgem.mapper import ChatMapper
@@ -28,7 +28,7 @@ from pyrogram import Client, errors
 from pyrogram.enums import ChatType
 
 # Import chat insights setup
-from silentgem.setup.insights_setup import setup_insights, clear_insights_history
+from silentgem.setup.insights_setup import setup_insights, clear_insights_history, upgrade_existing_channels_for_insights
 from silentgem.bot.telegram_bot import get_insights_bot
 from silentgem.bot.command_handler import get_command_handler
 
@@ -1248,9 +1248,8 @@ async def interactive_mode():
             logger.error(f"Error in interactive mode: {e}")
             await asyncio.sleep(1)  # Pause to avoid tight error loop
 
-async def main():
-    """Main entry point for SilentGem"""
-    # Parse command-line arguments
+async def parse_arguments():
+    """Parse command-line arguments"""
     parser = argparse.ArgumentParser(description='SilentGem - A Telegram translator by Dhillon Kannabhiran')
     parser.add_argument('--setup', action='store_true', help='Run the setup wizard')
     parser.add_argument('--version', action='store_true', help='Show version info')
@@ -1261,7 +1260,20 @@ async def main():
     parser.add_argument('--config-language', action='store_true', help='Update target language setting only')
     parser.add_argument('--setup-insights', action='store_true', help='Configure Chat Insights feature')
     parser.add_argument('--clear-insights-history', action='store_true', help='Clear stored message history used for Chat Insights')
-    args = parser.parse_args()
+    parser.add_argument('--upgrade-insights', action='store_true', help='Upgrade existing channels to support Chat Insights')
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
+    return parser.parse_args()
+
+async def main():
+    """Main entry point for SilentGem"""
+    # Get command-line arguments
+    args = parse_arguments()
+
+    # Initialize logging with appropriate level
+    init_logging(args.verbose)
+
+    # Initialize data directory
+    init_data_directory()
     
     # Show ASCII banner
     print(SILENTGEM_ASCII)
@@ -1409,6 +1421,15 @@ async def main():
             print("Failed to update target language.")
         return
     
+    # Handle upgrade insights request
+    if args.upgrade_insights:
+        success = await upgrade_existing_channels_for_insights()
+        if success:
+            print("✅ Existing channels have been checked and instructions sent for adding the Chat Insights bot.")
+        else:
+            print("❌ Failed to upgrade existing channels for Chat Insights.")
+        return
+    
     logger.info("Starting SilentGem")
     
     # Run setup wizard if explicitly requested
@@ -1437,9 +1458,40 @@ async def main():
             logger.error("Configuration is still invalid after setup. Please try again.")
             return
     
+    # Check if is first run for v1.1 (check version file)
+    try:
+        version_upgrade_file = os.path.join(DATA_DIR, "version_upgraded.txt")
+        is_first_v11_run = False
+        
+        # Version file doesn't exist or doesn't contain 1.1.0, so this is the first run of v1.1
+        if not os.path.exists(version_upgrade_file):
+            is_first_v11_run = True
+        else:
+            with open(version_upgrade_file, "r") as f:
+                content = f.read().strip()
+                if "1.1.0" not in content:
+                    is_first_v11_run = True
+                    
+        # If this is the first run of v1.1, check existing channels and upgrade them
+        if is_first_v11_run:
+            logger.info("First run of v1.1.0 detected. Checking for existing channels to upgrade...")
+            try:
+                from silentgem.config.insights_config import is_insights_configured
+                
+                # Only auto-upgrade if insights is configured
+                if is_insights_configured():
+                    await upgrade_existing_channels_for_insights()
+                
+                # Mark as upgraded
+                with open(version_upgrade_file, "w") as f:
+                    f.write("1.1.0")
+            except Exception as e:
+                logger.error(f"Error during upgrade check: {e}")
+    except Exception as e:
+        logger.error(f"Error checking version upgrade status: {e}")
+    
     # If service flag is provided, start translation service directly
     if args.service:
-        client = SilentGemClient()
         try:
             await client.start()
             await asyncio.Future()  # Run forever
@@ -1491,6 +1543,31 @@ async def cleanup():
             logger.info("Chat Insights bot stopped")
     except Exception as e:
         logger.error(f"Error stopping insights bot: {e}")
+
+def init_logging(verbose=False):
+    """Initialize logging with appropriate level"""
+    # Set log level based on verbose flag
+    log_level = "DEBUG" if verbose else LOG_LEVEL
+    
+    # Configure logger
+    logger.remove()
+    logger.add(
+        "logs/silentgem.log",
+        rotation="10 MB",
+        level=log_level,
+        backtrace=True,
+        diagnose=True,
+    )
+    logger.add(lambda msg: print(msg), level=log_level)
+    
+    if verbose:
+        logger.debug("Verbose logging enabled")
+
+def init_data_directory():
+    """Initialize the data directory"""
+    # Ensure data directory exists
+    ensure_dir_exists(DATA_DIR)
+    ensure_dir_exists(os.path.dirname(MAPPING_FILE))
 
 if __name__ == "__main__":
     try:

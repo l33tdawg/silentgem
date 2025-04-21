@@ -362,4 +362,93 @@ async def clear_insights_history():
             return False
     except Exception as e:
         print(f"❌ Error clearing message history: {e}")
+        return False
+
+async def upgrade_existing_channels_for_insights():
+    """
+    Upgrade existing chat mappings to support Chat Insights
+    This function is called when a user upgrades to v1.1
+    """
+    try:
+        print("\n=== Upgrading Existing Channels for Chat Insights ===")
+        print("This will check your existing target channels and add the Chat Insights bot to them.")
+        
+        # Check if insights is configured
+        if not is_insights_configured():
+            print("\nChat Insights is not yet configured. Please run --setup-insights first.")
+            return False
+        
+        # Get the bot username
+        config = get_insights_config()
+        bot_username = config.get("bot_username")
+        
+        if not bot_username:
+            print("\nNo Chat Insights bot configured. Please run --setup-insights first.")
+            return False
+            
+        # Get all existing mappings
+        from silentgem.mapper import ChatMapper
+        mapper = ChatMapper()
+        mappings = mapper.get_all()
+        
+        if not mappings:
+            print("\nNo existing chat mappings found.")
+            return True
+            
+        # Get the client
+        from silentgem.client import get_client
+        client = get_client()
+        
+        # Get the insights bot
+        insights_bot = get_insights_bot()
+        
+        # Keep track of channels that need the bot
+        channels_to_upgrade = []
+        
+        print(f"\nFound {len(mappings)} existing chat mappings. Checking target channels...")
+        
+        # Check each target channel to see if it needs the bot
+        for source_id, target_id in mappings.items():
+            try:
+                # Get chat info
+                target_chat = await client.get_chat(target_id)
+                chat_name = getattr(target_chat, "title", f"Chat {target_id}")
+                
+                # Check if the bot is already a member
+                try:
+                    bot_member = await client.get_chat_member(target_id, f"@{bot_username}")
+                    if bot_member:
+                        print(f"✅ Bot @{bot_username} is already in {chat_name}")
+                        continue
+                except Exception:
+                    # Bot is not a member
+                    channels_to_upgrade.append({
+                        "id": target_id,
+                        "name": chat_name
+                    })
+                    print(f"🔄 Target channel {chat_name} needs to add the Chat Insights bot")
+            except Exception as e:
+                print(f"⚠️ Could not check channel {target_id}: {e}")
+        
+        if not channels_to_upgrade:
+            print("\n✅ All existing channels already have Chat Insights bot.")
+            return True
+            
+        print(f"\nFound {len(channels_to_upgrade)} channels that need to add the Chat Insights bot.")
+        print("To enable Chat Insights in these channels, you need to add the bot manually:")
+        
+        for channel in channels_to_upgrade:
+            print(f"\n📣 Channel: {channel['name']}")
+            await insights_bot.add_to_chat(channel['id'])
+            
+        print("\n✅ Sent instructions to all channels that need to be upgraded.")
+        print("\nIMPORTANT: You need to manually add the bot to each channel following the instructions")
+        print("that were sent to those channels. Chat Insights will only work in channels where the bot is present.")
+        
+        return True
+    
+    except Exception as e:
+        print(f"\n❌ Error upgrading channels for Chat Insights: {e}")
+        import traceback
+        traceback.print_exc()
         return False 
