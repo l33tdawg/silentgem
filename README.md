@@ -132,6 +132,21 @@ python silentgem.py --setup-insights
 
 During setup, you'll create a dedicated Telegram bot (via BotFather) that will be automatically added to your target channels.
 
+#### Creating a Bot with BotFather
+
+To create a bot for Chat Insights:
+
+1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
+2. Start a chat with BotFather
+3. Send the `/newbot` command
+4. Follow the instructions to:
+   - Set a name for your bot (e.g., "SilentGem Insights")
+   - Set a username for your bot (must end with "bot", e.g., "silentgem_insights_bot")
+5. BotFather will give you a token (like `123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ`)
+6. Copy this token when prompted during the `--setup-insights` process
+
+The bot will be automatically added to your target channels during setup, or you can manually add it later.
+
 ### Using Chat Insights
 
 There are two ways to query your conversation history:
