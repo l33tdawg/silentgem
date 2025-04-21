@@ -50,6 +50,9 @@ class SilentGemClient:
         # Store tasks to properly cancel them during shutdown
         self._tasks = {}
         
+        # For tracking running state
+        self._running = False
+        
         logger.info("SilentGem client initialized")
     
     async def start(self):
@@ -661,59 +664,48 @@ class SilentGemClient:
             logger.info("Client idle loop complete")
     
     async def stop(self):
-        """Stop the client and cancel all tasks."""
-        print("\n⏹️ Stopping SilentGem client...")
-        logger.info("Stopping SilentGem client")
+        """Stop the client"""
+        logger.info("Stopping SilentGem client...")
+        print("\n🛑 Stopping SilentGem client...")
         
-        # CRITICAL: First thing, set running to False to stop all background tasks
+        # Cancel all pending tasks
+        for task_name, task in list(self._tasks.items()):
+            if not task.done() and not task.cancelled():
+                logger.debug(f"Cancelling task {task_name}")
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        
+        self._tasks.clear()
+        
+        try:
+            # Stop the client
+            if self.client.is_connected:
+                await self.client.stop()
+                logger.info("Client stopped successfully")
+                print("✅ Client stopped successfully")
+            else:
+                logger.info("Client was not running, nothing to stop")
+        except Exception as e:
+            logger.error(f"Error stopping client: {e}")
+            print(f"❌ Error stopping client: {e}")
+        
+        self._running = False
+        logger.info("SilentGem client stopped")
+
+    async def stop_client(self):
+        """Stop the client and clean up"""
+        await self.stop()
+        
+        # Clear any resources
+        self.chat_mapping = {}
+        
+        # Set running flag to False
         self._running = False
         
-        # Ensure the shutdown future is set
-        if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
-            logger.info("Setting shutdown future")
-            self._shutdown_future.set_result(None)
-        
-        # Check if force shutdown was requested from main process
-        if hasattr(self, '_force_shutdown') and self._force_shutdown:
-            logger.warning("Force shutdown requested - cancelling all tasks immediately")
-            print("⚠️ Force shutdown mode - cancelling all tasks immediately")
-        
-        # Cancel all background tasks with a short timeout
-        tasks_cancelled = 0
-        for task_name, task in list(self._tasks.items()):
-            if not task.done():
-                print(f"📉 Cancelling task: {task_name}")
-                task.cancel()
-                tasks_cancelled += 1
-                
-                try:
-                    # Very short timeout for each task to avoid hanging
-                    await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    # Expected exceptions during cancellation
-                    pass
-                except Exception as e:
-                    logger.error(f"Error waiting for task {task_name} to cancel: {e}")
-        
-        print(f"📉 Cancelled {tasks_cancelled} background tasks")
-        self._tasks.clear()
-
-        # Try to stop the Telegram client with reduced timeout to avoid hangs
-        if hasattr(self, 'client'):
-            try:
-                logger.info("Stopping Telegram client connection")
-                await asyncio.wait_for(self.client.stop(), timeout=1.5)
-                logger.info("Telegram client stopped successfully")
-                print("✅ Telegram client stopped successfully")
-            except asyncio.TimeoutError:
-                logger.warning("Telegram client stop timed out, but shutdown will continue")
-                print("⚠️ Telegram client disconnect timed out, but shutdown will continue")
-            except Exception as e:
-                logger.error(f"Error stopping Telegram client: {e}")
-                print(f"⚠️ Error stopping Telegram client: {e}")
-        
-        logger.info("SilentGem client stopped")
-        print("✅ SilentGem client stopped")
+        return self
     
     async def _heartbeat(self):
         """Periodically log a heartbeat to show the client is still running"""
@@ -928,3 +920,31 @@ class SilentGemClient:
         except Exception as e:
             print(f"❌ Error in active message polling: {e}")
             logger.error(f"Error in active message polling: {e}") 
+
+    async def start_client(self):
+        """Start the client and return it"""
+        if not self._running:
+            await self.start()
+            self._running = True
+        return self
+
+# Singleton instance
+_instance = None
+
+def get_client():
+    """Get the SilentGemClient singleton instance"""
+    global _instance
+    if _instance is None:
+        try:
+            _instance = SilentGemClient()
+        except Exception as e:
+            logger.error(f"Error creating SilentGemClient: {e}")
+            
+    return _instance
+
+# Add function to cleanly start the client
+async def start_client():
+    """Start the client singleton instance"""
+    client = get_client()
+    await client.start()
+    return client 
