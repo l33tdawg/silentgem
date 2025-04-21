@@ -34,9 +34,17 @@ ENV/
 *.session-shm
 *.session-wal
 backups/
+sessions/
 
 # Application specific
 data/mapping.json
+data/backups/*
+data/message_state.json
+data/messages.db
+data/messages.db-*
+data/insights_config.json
+data/*.db
+data/*.json
 chat_ids.txt
 logs/
 
@@ -47,5 +55,6 @@ logs/
 *.swo
 .DS_Store 
 
-#  MD specific files 
-chat-insight-enhancement.md
+# Documentation files
+# Uncomment this if you want to exclude the enhancement doc from commits
+# chat-insight-enhancement.md

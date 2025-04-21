@@ -27,6 +27,9 @@ from silentgem.mapper import ChatMapper
 from pyrogram import Client, errors
 from pyrogram.enums import ChatType
 
+# Import chat insights setup
+from silentgem.setup.insights_setup import setup_insights, clear_insights_history
+
 # Add debug flag
 DEBUG = os.environ.get("SILENTGEM_DEBUG", "0") == "1"
 
@@ -1172,10 +1175,11 @@ async def display_menu():
     print("5. Run Setup Wizard")
     print("6. Update LLM Settings")
     print("7. Update Target Language")
-    print("8. Exit")
+    print("8. Chat Insights Settings")
+    print("9. Exit")
     print("============================")
     
-    choice = input("Enter your choice (1-8): ").strip()
+    choice = input("Enter your choice (1-9): ").strip()
     return choice
 
 async def interactive_mode():
@@ -1218,6 +1222,9 @@ async def interactive_mode():
                 from silentgem.setup import config_target_language
                 await config_target_language()
             elif choice == '8':
+                # Chat Insights settings
+                await setup_insights()
+            elif choice == '9':
                 print("Exiting SilentGem. Goodbye!")
                 break
             else:
@@ -1245,6 +1252,8 @@ async def main():
     parser.add_argument('--clear-mappings', action='store_true', help='Reset chat mappings when they cause issues')
     parser.add_argument('--config-llm', action='store_true', help='Update LLM/translator settings only')
     parser.add_argument('--config-language', action='store_true', help='Update target language setting only')
+    parser.add_argument('--setup-insights', action='store_true', help='Configure Chat Insights feature')
+    parser.add_argument('--clear-insights-history', action='store_true', help='Clear stored message history used for Chat Insights')
     args = parser.parse_args()
     
     # Show ASCII banner
