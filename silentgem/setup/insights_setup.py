@@ -11,7 +11,7 @@ from loguru import logger
 from pyrogram import Client
 
 from silentgem.config import API_ID, API_HASH, SESSION_NAME, ensure_dir_exists
-from silentgem.config.insights_config import get_insights_config
+from silentgem.config.insights_config import get_insights_config, is_insights_configured
 from silentgem.database.message_store import get_message_store
 from silentgem.bot.telegram_bot import get_insights_bot
 
