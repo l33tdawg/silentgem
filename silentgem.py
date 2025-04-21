@@ -152,55 +152,60 @@ def signal_handler(sig, frame):
         print("\n⚠️ Force shutdown requested... Returning to menu after cleanup")
         force_shutdown_requested = True
         menu_return_requested = True
-        
-        if shutdown_timer:
-            shutdown_timer.cancel()
-            
-        # Count the number of times we've been interrupted during shutdown
-        if not hasattr(signal_handler, 'interrupt_count'):
-            signal_handler.interrupt_count = 1
-        else:
-            signal_handler.interrupt_count += 1
-            
-        # After the second interrupt (not third), just exit completely
-        if signal_handler.interrupt_count >= 2:
-            print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
-            # Call cleanup before hard exit
-            try:
-                asyncio.run(cleanup())
-            except:
-                pass
-            # Hard exit with non-zero status
-            os._exit(1)
+    
+    if shutdown_timer:
+        shutdown_timer.cancel()
+    
+    # Count the number of times we've been interrupted during shutdown
+    if not hasattr(signal_handler, 'interrupt_count'):
+        signal_handler.interrupt_count = 1
     else:
-        # First Ctrl+C, try graceful shutdown with timeout
-        print("\n🛑 Received exit signal. Shutting down gracefully...")
-        shutdown_in_progress = True
-        menu_return_requested = True
-        signal_handler.shutdown_requested = True
-        
-        # Initialize interrupt counter
-        signal_handler.interrupt_count = 0
-        
-        # Set a timer to force exit if shutdown takes too long
-        shutdown_timer = threading.Timer(3.0, handle_slow_shutdown)
-        shutdown_timer.daemon = True
-        shutdown_timer.start()
+        signal_handler.interrupt_count += 1
+    
+    # After the second interrupt (not third), just exit completely
+    if signal_handler.interrupt_count >= 2:
+        print("\n⚠️ Multiple interrupts detected. Forcing immediate exit.")
+        # Call cleanup before hard exit
+        try:
+            asyncio.run(cleanup())
+        except:
+            pass  # Ignore any errors during emergency cleanup
+        sys.exit(0)  # Force immediate exit
+    
+    # First Ctrl+C, try graceful shutdown with timeout
+    print("\n🛑 Received exit signal. Shutting down gracefully...")
+    shutdown_in_progress = True
+    menu_return_requested = True
+    signal_handler.shutdown_requested = True
+    
+    # Initialize interrupt counter
+    signal_handler.interrupt_count = 0
+    
+    # Set a timer to force exit if shutdown takes too long
+    # Increased from 3.0 to 5.0 seconds to give more time for proper shutdown
+    shutdown_timer = threading.Timer(5.0, handle_slow_shutdown)
+    shutdown_timer.daemon = True
+    shutdown_timer.start()
 
 def handle_slow_shutdown():
     global menu_return_requested, force_shutdown_requested
     
     print("\n⚠️ Shutdown taking too long. Forcing immediate shutdown...")
+    # Always ensure we return to menu
     menu_return_requested = True
     force_shutdown_requested = True
     
-    # Don't try to access asyncio from this thread - it causes errors
-    # Just set flags and let the main event loop handle it
+    # Set a timer to force exit completely if we're still not back to menu
+    def force_complete_exit():
+        print("\n⚠️ Shutdown failed to complete. Forcing exit...")
+        try:
+            asyncio.run(cleanup())
+        except:
+            pass
+        os._exit(1)  # Force hard exit as a last resort
     
-    # Set a hard timeout to force exit if nothing happens
-    emergency_timer = threading.Timer(2.0, lambda: os._exit(1))
-    emergency_timer.daemon = True
-    emergency_timer.start()
+    # Wait 3 more seconds before hard exit
+    threading.Timer(3.0, force_complete_exit).start()
 
 # Modified to return to menu instead of exiting
 def force_exit():
@@ -1250,10 +1255,11 @@ async def interactive_mode():
 
 def parse_arguments():
     """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(description='SilentGem - A Telegram translator by Dhillon Kannabhiran')
+    parser = argparse.ArgumentParser(description='SilentGem - A Telegram translator by Dhillon Kannabhiran.\nRuns in interactive menu mode by default.')
     parser.add_argument('--setup', action='store_true', help='Run the setup wizard')
     parser.add_argument('--version', action='store_true', help='Show version info')
-    parser.add_argument('--service', action='store_true', help='Start the translation service without menu')
+    parser.add_argument('--service', action='store_true', help='Start the translation service directly without showing the interactive menu')
+    parser.add_argument('--no-menu', action='store_true', help='Same as --service: run in service mode without interactive menu')
     parser.add_argument('--cleanup', action='store_true', help='Clean up session files and unlock database')
     parser.add_argument('--clear-mappings', action='store_true', help='Reset chat mappings when they cause issues')
     parser.add_argument('--config-llm', action='store_true', help='Update LLM/translator settings only')
@@ -1284,7 +1290,7 @@ async def main():
         print(f"SilentGem v{__version__}")
         return
     
-    # Handle cleanup request
+    # Handle specific command-line flags that exit after execution
     if args.cleanup:
         print("Performing cleanup operation...")
         print("\nThis will fix 'database is locked' and 'Cannot operate on a closed database' errors.")
@@ -1369,7 +1375,6 @@ async def main():
         print("\nIf you had mappings set up, they are preserved in the data/mapping.json file.")
         return
     
-    # Handle clear-mappings request
     if args.clear_mappings:
         print("🔄 Resetting chat mappings...")
         
@@ -1403,7 +1408,6 @@ async def main():
         
         return
     
-    # Handle LLM configuration update
     if args.config_llm:
         success = await config_llm_settings()
         if success:
@@ -1412,7 +1416,6 @@ async def main():
             print("Failed to update LLM configuration.")
         return
     
-    # Handle target language configuration update
     if args.config_language:
         success = await config_target_language()
         if success:
@@ -1421,7 +1424,6 @@ async def main():
             print("Failed to update target language.")
         return
     
-    # Handle upgrade insights request
     if args.upgrade_insights:
         success = await upgrade_existing_channels_for_insights()
         if success:
@@ -1430,9 +1432,19 @@ async def main():
             print("❌ Failed to upgrade existing channels for Chat Insights.")
         return
     
+    if args.setup_insights:
+        # Configure Chat Insights
+        await setup_insights()
+        return
+        
+    if args.clear_insights_history:
+        # Clear insights history
+        await clear_insights_history()
+        return
+    
     logger.info("Starting SilentGem")
     
-    # Run setup wizard if explicitly requested
+    # Run setup wizard if explicitly requested or if not configured
     if args.setup:
         logger.info("Setup flag provided, running setup wizard")
         success = await setup_wizard()
@@ -1490,45 +1502,57 @@ async def main():
     except Exception as e:
         logger.error(f"Error checking version upgrade status: {e}")
     
-    # Initialize client before use
+    # Initialize client
     client = SilentGemClient()
     
-    # If service flag is provided, start translation service directly
-    if args.service:
+    # SERVICE MODE: If service flag or no-menu flag is provided, start translation service directly
+    if args.service or args.no_menu:
+        print("\n[INFO] Starting in service mode (non-interactive)")
         try:
             await client.start()
             await asyncio.Future()  # Run forever
         except KeyboardInterrupt:
             logger.info("Keyboard interrupt received, shutting down")
+            print("\nService stopped by user. Shutting down...")
         except Exception as e:
             logger.error(f"Error running SilentGem: {e}")
+            print(f"\nError: {e}")
         finally:
             await client.stop()
             logger.info("SilentGem stopped")
         return
     
-    # Start monitoring sources
-    await client.start_client()
-    
-    # Start the insights bot if configured
-    from silentgem.config.insights_config import is_insights_configured
-    if is_insights_configured():
-        try:
-            # Initialize command handler and bot
-            insights_bot = get_insights_bot()
-            command_handler = get_command_handler()
-            
-            # Link the command handler to the bot
-            insights_bot.set_command_handler(command_handler)
-            
-            # Start the bot
-            await insights_bot.start()
-            logger.info("Chat Insights bot started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start Chat Insights bot: {e}")
-    
-    # Otherwise, show interactive menu
-    await interactive_mode()
+    # INTERACTIVE MODE (DEFAULT): No special flags provided, run in interactive menu mode
+    try:
+        # Skip starting the client - we'll do this only when the user selects option 1
+        # This ensures we don't enter service mode by default
+        
+        # Start the insights bot if configured
+        from silentgem.config.insights_config import is_insights_configured
+        if is_insights_configured():
+            try:
+                # Initialize command handler and bot
+                insights_bot = get_insights_bot()
+                command_handler = get_command_handler()
+                
+                # Link the command handler to the bot
+                insights_bot.set_command_handler(command_handler)
+                
+                # Start the bot
+                await insights_bot.start()
+                logger.info("Chat Insights bot started successfully")
+            except Exception as e:
+                logger.error(f"Failed to start Chat Insights bot: {e}")
+        
+        # Show interactive menu - this is the default behavior
+        print("\n[INFO] Starting in interactive mode")
+        await interactive_mode()
+    except Exception as e:
+        logger.error(f"Error in interactive mode: {e}")
+        print(f"\nError in interactive mode: {e}")
+    finally:
+        # Make sure any resources are properly cleaned up
+        await cleanup()
 
 async def cleanup():
     """Clean up resources on exit"""
