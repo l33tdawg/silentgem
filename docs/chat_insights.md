@@ -6,6 +6,18 @@ This guide explains how to use the Chat Insights feature in SilentGem to search 
 
 Chat Insights allows you to query your translated conversation history in private channels. You can ask questions like "Who talked about APIs yesterday?" or "Show me messages about the project from last week" directly in your target channels.
 
+### Enhanced Cross-Chat Context Analysis (v1.2)
+
+The latest version includes powerful features for analyzing information across multiple chats:
+
+- **Cross-chat awareness**: Search and analyze information across all your monitored channels
+- **Intelligent context retrieval**: Gets context from before and after matched messages (15 messages in each direction)
+- **Unified insights**: Identifies connections between information from different sources
+- **Smart context organization**: Groups messages by chat for better understanding
+- **Alternative term searching**: Uses smart language models to find related messages using alternative search terms
+
+This makes Chat Insights especially powerful for monitoring multiple sources about the same topic (like news channels, discussion groups, etc.) and getting a comprehensive understanding of discussions happening across them.
+
 ## Setting Up Chat Insights
 
 Chat Insights is enabled by default when you install SilentGem. You can customize the settings using:
@@ -58,6 +70,35 @@ Chat Insights understands natural language queries. Here are some examples:
 - **Topic-based queries**:
   - "Find all messages about deployment"
   - "Show discussions about the UI redesign"
+
+- **Cross-chat analysis queries** (NEW):
+  - "Summarize what different groups are saying about the Ukraine situation"
+  - "Compare discussions about the new feature across all channels"
+  - "What are the main differences in how Group A and Group B are discussing the topic?" 
+  - "Find connections between the API discussion in the dev channel and project planning channel"
+
+## Advanced Features
+
+### Cross-Chat Context Analysis
+
+The cross-chat context feature allows you to gain insights that span multiple conversations:
+
+#### How It Works
+
+1. **Broad Searching**: When you search for a topic, Chat Insights finds relevant messages across all your channels
+2. **Context Expansion**: For each match, it retrieves surrounding messages (15 before and 15 after) for context
+3. **Intelligent Organization**: The AI organizes messages by chat, maintaining the chronological flow
+4. **Synthesis**: The AI analyzes connections between information from different sources
+5. **Unified Response**: You get a comprehensive answer that synthesizes insights from all relevant channels
+
+#### Best Use Cases
+
+This feature is particularly powerful for:
+
+- **News monitoring**: Track how different news sources report on the same topic
+- **Project coordination**: See how discussions in different teams relate to each other
+- **Research**: Gather comprehensive information on a topic from multiple sources
+- **Intelligence analysis**: Find connections between discussions happening in different groups
 
 ## Privacy and Security
 

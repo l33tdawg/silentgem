@@ -7,6 +7,7 @@ from loguru import logger
 import httpx
 import json
 import asyncio
+from abc import ABC, abstractmethod
 
 from silentgem.config import (
     GEMINI_API_KEY, TARGET_LANGUAGE, LLM_ENGINE,
@@ -17,7 +18,25 @@ from silentgem.config import (
 if LLM_ENGINE == "gemini":
     genai.configure(api_key=GEMINI_API_KEY)
 
-class GeminiTranslator:
+class BaseTranslator(ABC):
+    """Base class for all translator implementations"""
+    
+    @abstractmethod
+    async def translate(self, text, source_language=None, max_tokens=None):
+        """
+        Translate or process text using LLM
+        
+        Args:
+            text (str): Text to translate/process
+            source_language (str, optional): Source language if known
+            max_tokens (int, optional): Maximum tokens for response
+            
+        Returns:
+            str: Processed text
+        """
+        pass
+
+class GeminiTranslator(BaseTranslator):
     """Translator class using Google Gemini API"""
     
     def __init__(self):
@@ -52,13 +71,14 @@ class GeminiTranslator:
             print(f"❌ Traceback: {traceback.format_exc()}")
             raise
     
-    async def translate(self, text, source_language=None):
+    async def translate(self, text, source_language=None, max_tokens=None):
         """
         Translate text using Gemini
         
         Args:
             text (str): Text to translate
             source_language (str, optional): Source language if known
+            max_tokens (int, optional): Maximum tokens for response
             
         Returns:
             str: Translated text
@@ -90,7 +110,7 @@ class GeminiTranslator:
                 print(f"📡 API request details:")
                 print(f"  - Model: {self.model_name}")
                 print(f"  - Temperature: 0.1")
-                print(f"  - Max tokens: 8192")
+                print(f"  - Max tokens: {max_tokens or 8192}")
                 
                 # For more reliable results, use generation config
                 response = await self.model.generate_content_async(
@@ -99,7 +119,7 @@ class GeminiTranslator:
                         'temperature': 0.1,  # Low temperature for accurate translations
                         'top_p': 0.95,
                         'top_k': 40,
-                        'max_output_tokens': 8192,  # Allow for longer translations
+                        'max_output_tokens': max_tokens or 8192,  # Allow for longer translations
                     }
                 )
                 print(f"✅ Received response from Gemini API")
@@ -209,166 +229,78 @@ class GeminiTranslator:
         return prompt.strip()
 
 
-class OllamaTranslator:
-    """Translator class using local Ollama API"""
+class OllamaTranslator(BaseTranslator):
+    """Translator class using Ollama local LLM"""
     
     def __init__(self):
         """Initialize the translator with Ollama settings"""
-        try:
-            self.base_url = OLLAMA_URL.rstrip('/')
-            self.model = OLLAMA_MODEL
-            
-            print(f"🔧 Initializing Ollama translator with URL: {self.base_url}")
-            print(f"🔧 Using Ollama model: {self.model}")
-            print(f"🔧 Target language set to: {TARGET_LANGUAGE}")
-            
-            # Store for logging
-            self.model_name = f"ollama/{self.model}"
-            
-            logger.info(f"Ollama translator initialized with model {self.model}")
-            print(f"✅ Ollama translator initialized")
-            
-        except Exception as e:
-            logger.error(f"Error initializing Ollama translator: {e}")
-            print(f"❌ Failed to initialize Ollama translator: {e}")
-            import traceback
-            print(f"❌ Traceback: {traceback.format_exc()}")
-            raise
+        self.api_url = OLLAMA_URL.rstrip("/")
+        self.model = OLLAMA_MODEL
+        logger.info(f"Ollama translator initialized with model {self.model} at {self.api_url}")
     
-    async def translate(self, text, source_language=None):
+    async def translate(self, text, source_language=None, max_tokens=None):
         """
-        Translate text using Ollama
+        Process text using Ollama
         
         Args:
-            text (str): Text to translate
+            text (str): Text to process
             source_language (str, optional): Source language if known
+            max_tokens (int, optional): Maximum tokens for response
             
         Returns:
-            str: Translated text
+            str: Processed text
         """
         if not text or text.isspace():
-            print("⚠️ Empty text received for translation, returning empty string")
             return ""
         
         try:
-            # Log some basic stats about the text
-            print(f"📝 Processing text: {len(text)} characters, {len(text.split())} words")
-            print(f"📌 Text sample: {text[:100]}...")
-            
-            # Log target language
-            print(f"🌐 Target language: {TARGET_LANGUAGE}")
+            # Construct the API endpoint
+            endpoint = f"{self.api_url}/api/generate"
             
             # Construct the prompt
             prompt = self._build_prompt(text, source_language)
-            print(f"🔍 Using prompt length: {len(prompt)} characters")
-            print(f"🔍 Prompt sample: {prompt[:150]}...")
             
-            # Get response from Ollama
-            print(f"🧠 Sending to Ollama ({self.model}) for translation...")
-            print(f"⏳ Awaiting response from Ollama API...")
-            
-            try:
-                # Print verbose information about the request
-                print(f"📡 API request details:")
-                print(f"  - Model: {self.model}")
-                print(f"  - Temperature: 0.1")
-                print(f"  - URL: {self.base_url}/api/generate")
-                
-                # Format request for Ollama
-                payload = {
-                    "model": self.model,
-                    "prompt": prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.1,
-                        "top_p": 0.95,
-                        "top_k": 40
-                    }
+            # Prepare the request payload
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,
+                    "top_p": 0.95,
+                    "top_k": 40
                 }
-                
-                # Use httpx for async HTTP requests
-                async with httpx.AsyncClient(timeout=120.0) as client:
-                    response = await client.post(
-                        f"{self.base_url}/api/generate",
-                        json=payload
-                    )
-                    
-                    # Check response status
-                    if response.status_code != 200:
-                        print(f"❌ Ollama API error: {response.status_code} - {response.text}")
-                        raise ValueError(f"Ollama API returned status code {response.status_code}")
-                    
-                    # Parse JSON response
-                    response_data = response.json()
-                    
-                    # Extract the response text
-                    if "response" not in response_data:
-                        print(f"❌ Unexpected Ollama response format: {response_data}")
-                        raise ValueError("Unexpected response format from Ollama API")
-                    
-                    translated_text = response_data["response"].strip()
-                    print(f"✅ Received response from Ollama API")
-                
-            except Exception as e:
-                print(f"❌ Ollama API error: {e}")
-                print(f"❌ Error type: {type(e).__name__}")
-                logger.error(f"Ollama API error: {e}")
-                
-                # Try with a simplified prompt as fallback
-                try:
-                    print("🔄 Trying simplified fallback prompt...")
-                    fallback_prompt = f"Translate this text to {TARGET_LANGUAGE}:\n\n{text}"
-                    print(f"🔄 Fallback prompt: {fallback_prompt[:150]}...")
-                    
-                    # Simplified fallback payload
-                    fallback_payload = {
-                        "model": self.model,
-                        "prompt": fallback_prompt,
-                        "stream": False
-                    }
-                    
-                    async with httpx.AsyncClient(timeout=120.0) as client:
-                        response = await client.post(
-                            f"{self.base_url}/api/generate",
-                            json=fallback_payload
-                        )
-                        
-                        if response.status_code != 200:
-                            raise ValueError(f"Ollama API returned status code {response.status_code}")
-                        
-                        response_data = response.json()
-                        translated_text = response_data["response"].strip()
-                        print(f"✅ Received response from fallback prompt")
-                
-                except Exception as fallback_error:
-                    print(f"❌ Fallback translation also failed: {fallback_error}")
-                    print(f"❌ Fallback error type: {type(fallback_error).__name__}")
-                    raise
+            }
             
-            # Post-process and validate the translation
-            if not translated_text:
-                print("❌ Empty translation received")
-                raise ValueError("Empty translation received from Ollama API")
+            # Add max_tokens if provided
+            if max_tokens:
+                payload["options"]["num_predict"] = max_tokens
             
-            # Check if the response is actually a translation or just an error message
-            if len(translated_text) < 5 and len(text) > 20:
-                print(f"❌ Suspiciously short translation: '{translated_text}'")
-                raise ValueError("Suspiciously short translation received")
-            
-            print(f"✅ Translation complete: {len(translated_text)} characters, {len(translated_text.split())} words")
-            print(f"📌 Translation sample: {translated_text[:100]}...")
-            
-            logger.debug(f"Translated: {text[:30]}... -> {translated_text[:30]}...")
-            return translated_text
-        
+            # Make the API request
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    endpoint, 
+                    json=payload,
+                    timeout=120.0  # Longer timeout for larger content
+                )
+                
+                # Check for successful response
+                if response.status_code != 200:
+                    error_msg = f"Ollama API error: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    return f"[Translation Error: {error_msg}]"
+                
+                # Parse the response
+                result = response.json()
+                
+                # Extract and clean the generated text
+                generated_text = result.get("response", "")
+                
+                # Return the cleaned output
+                return generated_text.strip()
+                
         except Exception as e:
-            logger.error(f"Translation error: {e}")
-            print(f"❌ Translation error: {e}")
-            print(f"❌ Error details: {type(e).__name__}")
-            import traceback
-            error_trace = traceback.format_exc()
-            print(f"❌ Traceback: {error_trace}")
-            logger.error(f"Translation error traceback: {error_trace}")
+            logger.error(f"Ollama translation error: {e}")
             return f"[Translation Error: {str(e)}]"
     
     def _build_prompt(self, text, source_language=None):
@@ -409,7 +341,7 @@ class OllamaTranslator:
 
 
 # Function to create the appropriate translator based on configuration
-def create_translator():
+async def create_translator():
     """Factory function to create the appropriate translator based on configuration"""
     if LLM_ENGINE == "gemini":
         return GeminiTranslator()

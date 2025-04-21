@@ -184,7 +184,7 @@ class MessageStore:
         Search messages in the database
         
         Args:
-            query: Text to search for
+            query: Text to search for (can include OR operators for complex searches)
             chat_id: Filter by chat ID (source or target)
             time_period: Time period to search in (e.g., "today", "yesterday", "week")
             limit: Maximum number of results to return
@@ -208,12 +208,26 @@ class MessageStore:
             
             # Add content search if query provided
             if query:
-                sql += " AND (content LIKE ? OR original_content LIKE ?)"
-                params.extend([f"%{query}%", f"%{query}%"])
-                
-                # Also check for entities (hashtags, mentions)
-                sql += " OR id IN (SELECT message_id FROM message_entities WHERE entity_text LIKE ?)"
-                params.append(f"%{query}%")
+                # Check if we have OR operators in the query
+                if " OR " in query:
+                    # Split by OR and create a compound query
+                    terms = query.split(" OR ")
+                    or_conditions = []
+                    
+                    for term in terms:
+                        term = term.strip()
+                        if term:
+                            # For each term, create content and entity conditions
+                            term_condition = "(content LIKE ? OR original_content LIKE ? OR id IN (SELECT message_id FROM message_entities WHERE entity_text LIKE ?))"
+                            or_conditions.append(term_condition)
+                            params.extend([f"%{term}%", f"%{term}%", f"%{term}%"])
+                    
+                    if or_conditions:
+                        sql += f" AND ({' OR '.join(or_conditions)})"
+                else:
+                    # Simple query without OR operators
+                    sql += " AND (content LIKE ? OR original_content LIKE ? OR id IN (SELECT message_id FROM message_entities WHERE entity_text LIKE ?))"
+                    params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
             
             # Add chat filter
             if chat_id:
@@ -245,6 +259,10 @@ class MessageStore:
                     month_ago = current_time - (30 * 86400)
                     sql += " AND timestamp >= ?"
                     params.append(month_ago)
+            
+            # Log the constructed query for debugging
+            logger.debug(f"Search query: {sql}")
+            logger.debug(f"Search params: {params}")
             
             # Add order and limit
             sql += " ORDER BY timestamp DESC LIMIT ?"
@@ -406,6 +424,106 @@ class MessageStore:
         except Exception as e:
             logger.error(f"Error clearing messages: {e}")
             return False
+    
+    def get_message_context(self, message_id, source_chat_id=None, before_count=10, after_count=10, cross_chat_context=True):
+        """
+        Get context messages before and after a specific message
+        
+        Args:
+            message_id: Internal database ID of the message
+            source_chat_id: Chat ID to limit context to (optional)
+            before_count: Number of messages to retrieve before this message
+            after_count: Number of messages to retrieve after this message
+            cross_chat_context: Whether to retrieve context across all chats (True) or just the source chat (False)
+            
+        Returns:
+            dict: Dictionary with 'before' and 'after' lists of message dictionaries
+        """
+        try:
+            cursor = self.conn.cursor()
+            result = {'before': [], 'after': []}
+            
+            # Get the timestamp of the target message
+            cursor.execute('''
+            SELECT timestamp, source_chat_id FROM messages WHERE id = ?
+            ''', (message_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                logger.warning(f"Cannot get context: Message {message_id} not found")
+                return result
+                
+            target_timestamp, msg_source_chat_id = row
+            
+            # If source_chat_id not specified, use the message's chat
+            if not source_chat_id:
+                source_chat_id = msg_source_chat_id
+            
+            # Get messages before this one
+            if before_count > 0:
+                if source_chat_id and not cross_chat_context:
+                    # Get context only from the same chat
+                    cursor.execute('''
+                    SELECT id, message_id, original_message_id, source_chat_id, target_chat_id,
+                        sender_id, sender_name, timestamp, content, original_content,
+                        source_language, target_language, is_media, media_type, is_forwarded
+                    FROM messages
+                    WHERE timestamp < ? 
+                    AND (source_chat_id = ? OR target_chat_id = ?)
+                    ORDER BY timestamp DESC LIMIT ?
+                    ''', (target_timestamp, source_chat_id, source_chat_id, before_count))
+                else:
+                    # Get context from all chats
+                    cursor.execute('''
+                    SELECT id, message_id, original_message_id, source_chat_id, target_chat_id,
+                        sender_id, sender_name, timestamp, content, original_content,
+                        source_language, target_language, is_media, media_type, is_forwarded
+                    FROM messages
+                    WHERE timestamp < ?
+                    ORDER BY timestamp DESC LIMIT ?
+                    ''', (target_timestamp, before_count))
+                
+                # Convert to list of dictionaries
+                columns = [col[0] for col in cursor.description]
+                before_messages = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                
+                # Reverse to get chronological order
+                result['before'] = list(reversed(before_messages))
+            
+            # Get messages after this one
+            if after_count > 0:
+                if source_chat_id and not cross_chat_context:
+                    # Get context only from the same chat
+                    cursor.execute('''
+                    SELECT id, message_id, original_message_id, source_chat_id, target_chat_id,
+                        sender_id, sender_name, timestamp, content, original_content,
+                        source_language, target_language, is_media, media_type, is_forwarded
+                    FROM messages
+                    WHERE timestamp > ? 
+                    AND (source_chat_id = ? OR target_chat_id = ?)
+                    ORDER BY timestamp ASC LIMIT ?
+                    ''', (target_timestamp, source_chat_id, source_chat_id, after_count))
+                else:
+                    # Get context from all chats
+                    cursor.execute('''
+                    SELECT id, message_id, original_message_id, source_chat_id, target_chat_id,
+                        sender_id, sender_name, timestamp, content, original_content,
+                        source_language, target_language, is_media, media_type, is_forwarded
+                    FROM messages
+                    WHERE timestamp > ?
+                    ORDER BY timestamp ASC LIMIT ?
+                    ''', (target_timestamp, after_count))
+                
+                # Convert to list of dictionaries
+                columns = [col[0] for col in cursor.description]
+                result['after'] = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            logger.debug(f"Retrieved {len(result['before'])} messages before and {len(result['after'])} messages after message {message_id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting message context: {e}")
+            return {'before': [], 'after': []}
 
 
 # Create a singleton instance

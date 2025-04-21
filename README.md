@@ -18,6 +18,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - CLI tools for managing chat mappings
 - Update translation engines without redoing full setup
 - Chat Insights for searching and analyzing conversation history (NEW in v1.1)
+- Cross-chat contextual analysis for deeper insights (NEW in v1.2)
 
 ## Requirements
 
@@ -114,13 +115,21 @@ When using Ollama, you can:
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
 
-## Chat Insights Feature (v1.1)
+## Chat Insights Feature (v1.2)
 
-SilentGem now includes a powerful Chat Insight feature that allows you to query your conversation history in your translated channels:
+SilentGem includes a powerful Chat Insight feature that allows you to query your conversation history in your translated channels:
 
 ### Overview
 
 Chat Insights automatically stores all translated messages in a local database and provides a natural language interface to search and analyze your conversation history through a dedicated Telegram bot.
+
+#### NEW: Cross-Chat Contextual Analysis
+
+The latest version includes enhanced contextual analysis capabilities:
+- **Cross-chat awareness**: Search and analyze information across all monitored channels
+- **Larger context window**: Get more context around matched messages (15 messages before/after)
+- **Unified insights**: See connections between information from different sources
+- **Smart context organization**: Messages are grouped by chat for better understanding
 
 ### Setting Up Chat Insights
 
@@ -176,6 +185,8 @@ Chat Insights understands natural language queries. Examples:
 - "Find all mentions of APIs from last week"
 - "What did Alice say about the database?"
 - "Show discussions about the UI redesign"
+- "Summarize what different groups are saying about the Ukraine situation"
+- "Compare discussions about the new feature across all channels"
 
 You can ask these questions in any target channel where the bot is present or in a direct message to the bot. The bot will search across all your channels and provide clickable links to the original messages.
 
@@ -197,7 +208,7 @@ For more detailed documentation on Chat Insights, see `docs/chat_insights.md`
 
 ## Roadmap
 
-### Version 1.2 - Bidirectional Communication
+### Version 1.3 - Bidirectional Communication
 
 The next version will enable seamless bidirectional communication:
 

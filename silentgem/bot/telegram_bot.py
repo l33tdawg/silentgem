@@ -98,8 +98,36 @@ class InsightsBot:
                     logger.debug(f"Cancelling task: {task_name}")
                     task.cancel()
             
-            # Stop the bot
-            await self.bot.stop()
+            # Wait a moment to let tasks clean up
+            await asyncio.sleep(0.5)
+            
+            if self.bot:
+                # Remove all handlers with improved error handling
+                if hasattr(self.bot, 'dispatcher'):
+                    try:
+                        # Instead of removing all handlers at once, remove them one by one
+                        for group in self.bot.dispatcher.groups:
+                            # Make a copy of the list to safely iterate and remove
+                            if group in self.bot.dispatcher.groups:
+                                handlers = self.bot.dispatcher.groups[group].copy() if isinstance(self.bot.dispatcher.groups[group], list) else []
+                                for handler in handlers:
+                                    try:
+                                        # Use a direct method call which is safer
+                                        if handler in self.bot.dispatcher.groups[group]:
+                                            self.bot.dispatcher.groups[group].remove(handler)
+                                    except (ValueError, KeyError) as e:
+                                        # Ignore errors about handlers not being in the list
+                                        logger.debug(f"Couldn't remove handler: {e}")
+                    except Exception as e:
+                        # Catch any other dispatcher errors
+                        logger.warning(f"Error removing handlers: {e}")
+                
+                # Stop the bot with block=False to avoid hanging
+                await self.bot.stop(block=False)
+                
+                # Wait a moment for the stop to take effect
+                await asyncio.sleep(1)
+            
             logger.info("Insights bot stopped")
             
             # Clear running flag
@@ -117,14 +145,26 @@ class InsightsBot:
             if self.command_handler:
                 query = message.text.split("/askgem", 1)[1].strip()
                 if query:
-                    await self.command_handler.handle_query(message, query)
+                    # Get verbosity setting
+                    verbosity = self.config.get("response_verbosity", "standard")
+                    
+                    # Use new interface
+                    response = await self.command_handler.handle_query(
+                        query_text=query,
+                        chat_id=message.chat.id,
+                        user=message.from_user,
+                        verbosity=verbosity
+                    )
+                    
+                    # Send the response
+                    await message.reply(response, quote=True)
                 else:
                     await message.reply("Please provide a query with the command.\nExample: `/askgem Who talked about API yesterday?`", quote=True)
             else:
                 await message.reply("Query processing is not available right now. Please try again later.", quote=True)
         
         # Handle regular messages (treat as queries if not a command)
-        @self.bot.on_message(filters.text & ~filters.command)
+        @self.bot.on_message(filters.text & (~filters.command("")))
         async def message_handler(client, message):
             """Handle regular messages as queries"""
             # Ignore messages in groups unless directly mentioned
@@ -152,7 +192,19 @@ class InsightsBot:
             
             # Process as a query if command handler exists
             if self.command_handler:
-                await self.command_handler.handle_query(message, message.text)
+                # Get verbosity setting
+                verbosity = self.config.get("response_verbosity", "standard")
+                
+                # Use new interface
+                response = await self.command_handler.handle_query(
+                    query_text=message.text,
+                    chat_id=message.chat.id,
+                    user=message.from_user,
+                    verbosity=verbosity
+                )
+                
+                # Send the response
+                await message.reply(response, quote=True)
     
     async def _idle(self):
         """Keep the bot running"""
@@ -180,6 +232,22 @@ class InsightsBot:
     def set_command_handler(self, handler):
         """Set the command handler"""
         self.command_handler = handler
+        
+        # Override the _send_typing_action method to use our bot's send_chat_action
+        original_send_typing = handler._send_typing_action
+        
+        async def send_typing_with_bot(chat_id):
+            """Send typing action using the bot"""
+            if self._running and self.bot:
+                try:
+                    await self.bot.send_chat_action(chat_id, "typing")
+                except Exception as e:
+                    logger.warning(f"Could not send typing action: {e}")
+                    # Fall back to original implementation
+                    await original_send_typing(chat_id)
+        
+        # Replace the method
+        handler._send_typing_action = send_typing_with_bot
     
     async def add_to_chat(self, chat_id):
         """
