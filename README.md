@@ -163,6 +163,8 @@ The bot will be automatically added to your target channels during setup, or you
 
 ### Using Chat Insights
 
+Chat Insights understands natural language queries and provides **conversational responses that synthesize information** from relevant messages, rather than just listing search results. It also uses the context of your ongoing conversation for better follow-up answers.
+
 There are two ways to query your conversation history:
 
 #### 1. Using the /askgem Command
@@ -220,7 +222,7 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 ### Version 1.3 - Conversational Memory (Coming Soon)
 
 Priority features planned for the next release:
-- **Conversational Context**: Remember previous interactions for more natural follow-up questions
+- **Persistent Conversation Context**: Remember previous interactions across different sessions for more natural follow-up questions over time.
 - **Interactive Exploration**: Add buttons to responses for expanding details or exploring related topics
 - **Guided Queries**: Get suggestions for follow-up questions related to your current topic
 - **Query Templates**: Save and reuse common search patterns

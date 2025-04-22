@@ -52,7 +52,7 @@ If you're in a group channel, you'll need to either:
 - Mention the bot (@SilentAsk) in your message
 - Reply to one of the bot's previous messages
 
-The bot will search across all your channels when you directly message it, providing a unified view of your conversations. Results include clickable links to the original messages so you can easily navigate to the source.
+The bot will search across all your channels when you directly message it, providing a unified view of your conversations. **It synthesizes information from relevant messages to provide a conversational answer, using the context of your current interaction for better follow-up understanding.** Results include clickable links to the original messages so you can easily navigate to the source.
 
 ## Example Queries
 
