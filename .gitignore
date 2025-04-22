@@ -58,3 +58,25 @@ logs/
 # Documentation files
 # Uncomment this if you want to exclude the enhancement doc from commits
 # chat-insight-enhancement.md
+
+# Log files
+*.log
+logs/
+*.log.?
+
+# OS generated files #
+######################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+ehthumbs.db
+Thumbs.db
+
+# User Data #
+#############
+config.ini
+*.session
+data/conversations/
