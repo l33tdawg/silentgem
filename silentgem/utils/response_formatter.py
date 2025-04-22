@@ -283,6 +283,61 @@ async def _format_with_llm(
         return _format_simple_fallback(messages, query)
     
     try:
+        # First make sure all messages are dicts with proper get method
+        safe_messages = []
+        for msg in messages:
+            # If it's already a dict with get method
+            if isinstance(msg, dict) and hasattr(msg, 'get'):
+                safe_messages.append(msg)
+            else:
+                # For any other object type (like Message objects), convert to dict
+                msg_dict = {}
+                
+                # Extract common fields with safe attribute access
+                if hasattr(msg, 'id'):
+                    msg_dict['id'] = msg.id
+                
+                if hasattr(msg, 'text'):
+                    msg_dict['text'] = msg.text
+                    msg_dict['content'] = msg.text  # Duplicate for compatibility
+                elif hasattr(msg, 'content'):
+                    msg_dict['content'] = msg.content
+                    msg_dict['text'] = msg.content  # Duplicate for compatibility
+                
+                # Extract chat info
+                if hasattr(msg, 'chat') and hasattr(msg.chat, 'id'):
+                    msg_dict['chat_id'] = str(msg.chat.id)
+                    msg_dict['source_chat_id'] = str(msg.chat.id)
+                    msg_dict['target_chat_id'] = str(msg.chat.id)
+                    if hasattr(msg.chat, 'title'):
+                        msg_dict['chat_title'] = msg.chat.title
+                
+                # Extract sender info
+                if hasattr(msg, 'from_user'):
+                    sender_name = getattr(msg.from_user, 'first_name', 'Unknown')
+                    if hasattr(msg.from_user, 'last_name') and msg.from_user.last_name:
+                        sender_name += f" {msg.from_user.last_name}"
+                    msg_dict['sender_name'] = sender_name
+                    msg_dict['sender'] = sender_name
+                
+                # Extract timestamp
+                if hasattr(msg, 'date'):
+                    try:
+                        if hasattr(msg.date, 'timestamp'):
+                            msg_dict['timestamp'] = int(msg.date.timestamp())
+                        else:
+                            msg_dict['timestamp'] = int(time.time())
+                    except:
+                        msg_dict['timestamp'] = int(time.time())
+                else:
+                    msg_dict['timestamp'] = int(time.time())
+                
+                # Add to safe messages
+                safe_messages.append(msg_dict)
+        
+        # Use the safe messages instead of the original ones
+        messages = safe_messages
+        
         # Organize messages by chat group
         chat_groups = defaultdict(list)
         for msg in messages:

@@ -54,7 +54,7 @@ class QueryProcessor:
             QueryInterpretationResult with processed query and metadata
         """
         # Get results from the search query processor
-        search_result = await self._search_query_processor.process_query(query)
+        search_result = await self._search_query_processor.process_query(query_text=query)
         
         # Convert to QueryInterpretationResult format
         result = QueryInterpretationResult(

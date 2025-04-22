@@ -157,9 +157,9 @@ class InsightsBot:
                     
                     # Use new interface
                     response = await self.command_handler.handle_query(
-                        query_text=query,
+                        query=query,
                         chat_id=message.chat.id,
-                        user=message.from_user,
+                        user_id=message.from_user.id if message.from_user else None,
                         verbosity=verbosity
                     )
                     
@@ -222,9 +222,9 @@ class InsightsBot:
                 
                 # Use new interface
                 response = await self.command_handler.handle_query(
-                    query_text=message.text,
+                    query=message.text,
                     chat_id=message.chat.id,
-                    user=message.from_user,
+                    user_id=message.from_user.id if message.from_user else None,
                     verbosity=verbosity
                 )
                 
@@ -263,13 +263,9 @@ class InsightsBot:
         
         async def send_typing_with_bot(chat_id):
             """Send typing action using the bot"""
-            if self._running and self.bot:
-                try:
-                    await self.bot.send_chat_action(chat_id, "typing")
-                except Exception as e:
-                    logger.warning(f"Could not send typing action: {e}")
-                    # Fall back to original implementation
-                    await original_send_typing(chat_id)
+            logger.debug(f"Typing action requested for chat_id: {chat_id}")
+            # Don't attempt any actual typing action - just silently succeed
+            return
         
         # Replace the method
         handler._send_typing_action = send_typing_with_bot

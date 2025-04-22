@@ -76,143 +76,267 @@ class CommandHandler:
         try:
             # Store user message in conversation history
             if chat_id and user_id:
-                conversation = self.conversation_memory.get_conversation(chat_id, user_id)
-                self.conversation_memory.add_message(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    role="user",
-                    content=query
-                )
+                try:
+                    conversation = self.conversation_memory.get_conversation(chat_id, user_id)
+                    self.conversation_memory.add_message(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        role="user",
+                        content=query
+                    )
+                except Exception as e:
+                    logger.warning(f"Error storing user message: {e}")
             
             # Send typing action if chat_id is provided
             if chat_id:
-                # This will use the implementation provided by telegram_bot
-                await self._send_typing_action(chat_id)
+                try:
+                    # This will use the implementation provided by telegram_bot
+                    await self._send_typing_action(chat_id)
+                except Exception as e:
+                    logger.warning(f"Error sending typing action: {e}")
             
             # Send initial acknowledgment via callback if provided
             if callback:
-                callback(f"⏳ Processing your request about '{query}'...")
+                try:
+                    callback(f"⏳ Processing your request about '{query}'...")
+                except Exception as e:
+                    logger.warning(f"Error sending callback: {e}")
                 
             # Get conversation history for context if this is a follow-up question
             conversation_history = None
             conversation_context = {}
             if chat_id and user_id:
-                conversation = self.conversation_memory.get_conversation(chat_id, user_id)
-                conversation_history = self.conversation_memory.get_conversation_history(chat_id, user_id)
-                conversation_context = conversation.context if hasattr(conversation, 'context') else {}
+                try:
+                    conversation = self.conversation_memory.get_conversation(chat_id, user_id)
+                    conversation_history = self.conversation_memory.get_conversation_history(chat_id, user_id)
+                    conversation_context = conversation.context if hasattr(conversation, 'context') else {}
+                except Exception as e:
+                    logger.warning(f"Error getting conversation history: {e}")
             
-            # Determine if this is a follow-up question
+            # Determine if this is a follow-up question - safely handle potential errors
             is_followup = False
-            if conversation_history and len(conversation_history) >= 2:
-                previous_messages = [msg for msg in conversation_history if msg.get('role') == 'user']
-                if len(previous_messages) >= 2:
-                    is_followup = self._is_related_query(query, previous_messages[-2].get('content', ''))
+            try:
+                if conversation_history and len(conversation_history) >= 2:
+                    previous_messages = [msg for msg in conversation_history if isinstance(msg, dict) and msg.get('role') == 'user']
+                    if len(previous_messages) >= 2:
+                        is_followup = self._is_related_query(query, previous_messages[-2].get('content', ''))
+            except Exception as e:
+                logger.warning(f"Error determining if query is follow-up: {e}")
             
-            # Process query with NLU to extract parameters
-            # If this is a follow-up, include context from the previous query
-            interpretation: QueryInterpretationResult = await self.query_processor.process_query(
-                query=query,
-                include_time=True,
-                include_inferred_params=True,
-                context=conversation_context if is_followup else None
-            )
-            
-            # Reuse time period from previous query if this is a follow-up and doesn't specify a new time
-            if is_followup and not interpretation.time_period and conversation_context.get('time_period'):
-                interpretation.time_period = conversation_context.get('time_period')
-                logger.info(f"Reusing time period from previous query: {interpretation.time_period}")
-            
-            # Include previous search results in follow-up if appropriate
-            if is_followup and conversation_context.get('previous_message_ids'):
-                previous_ids = conversation_context.get('previous_message_ids', [])
-                logger.info(f"Found {len(previous_ids)} previous message IDs for context in follow-up")
-                # We'll use this context in query processing later
-            
-            # Prepare search parameters
-            search_params = QueryParams(
-                query=interpretation.processed_query or query,
-                limit=20,
-                chat_id=chat_id if chat_id and not interpretation.cross_chats else None,
-                time_period=interpretation.time_period
-            )
-            
-            # Execute search
-            start_time = time.time()
-            messages = await get_search_engine().search(search_params)
-            search_time = time.time() - start_time
-            logger.info(f"Search completed in {search_time:.2f}s, found {len(messages)} results")
-            
-            # Organize messages by chat for better context
-            chat_messages_map = {}
-            if messages:
-                for msg in messages:
-                    chat_id = msg.get("target_chat_id") or msg.get("source_chat_id")
-                    if chat_id:
-                        if chat_id not in chat_messages_map:
-                            chat_messages_map[chat_id] = []
-                        chat_messages_map[chat_id].append(msg)
-            
-            # Format results with enhanced context, including conversation history
-            response = await format_search_results(
-                messages=messages,
-                query=query,
-                parsed_query={"processed_query": interpretation.processed_query, "time_period": interpretation.time_period},
-                verbosity=verbosity,
-                include_quotes=include_quotes,
-                include_timestamps=include_timestamps,
-                include_sender_info=include_sender_info,
-                include_channel_info=include_channel_info,
-                chat_messages_map=chat_messages_map,
-                conversation_history=conversation_history
-            )
-            
-            # Update conversation context with the latest query information
-            if chat_id and user_id:
-                message_ids = [msg.get("id") for msg in messages] if messages else []
-                new_context = {
-                    'last_query': query,
-                    'processed_query': interpretation.processed_query or query,
-                    'time_period': interpretation.time_period,
-                    'previous_message_ids': message_ids,
-                    'last_updated': int(time.time())
-                }
-                self.conversation_memory.update_context(chat_id, user_id, new_context)
-            
-            # Add assistant response to conversation history
-            if chat_id and user_id:
-                self.conversation_memory.add_message(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    role="assistant",
-                    content=response
+            # Process query with NLU to extract parameters - safely handle errors
+            interpretation = None
+            try:
+                # If this is a follow-up, include context from the previous query
+                interpretation = await self.query_processor.process_query(
+                    query=query,
+                    include_time=True,
+                    include_inferred_params=True,
+                    context=conversation_context if is_followup else None
+                )
+            except Exception as e:
+                logger.warning(f"Error processing query with NLU: {e}")
+                # Create minimal interpretation
+                from silentgem.llm.query_processor import QueryInterpretationResult
+                interpretation = QueryInterpretationResult(
+                    processed_query=query,
+                    time_period=None,
+                    cross_chats=False
                 )
             
-            # Handle case where no results found
-            if not messages:
-                no_results_msg = "📭 No messages found matching your query: '{}'."
-                
-                # Suggest alternatives if this is a follow-up with no results
-                if is_followup:
-                    suggest_msg = (
-                        "\n\nThis follow-up question didn't match any results. "
-                        "Try rephrasing or asking a different question."
+            # Reuse time period from previous query if this is a follow-up and doesn't specify a new time
+            try:
+                if is_followup and not interpretation.time_period and conversation_context.get('time_period'):
+                    interpretation.time_period = conversation_context.get('time_period')
+                    logger.info(f"Reusing time period from previous query: {interpretation.time_period}")
+            except Exception as e:
+                logger.warning(f"Error reusing time period: {e}")
+            
+            # Include previous search results in follow-up if appropriate
+            try:
+                if is_followup and conversation_context.get('previous_message_ids'):
+                    previous_ids = conversation_context.get('previous_message_ids', [])
+                    logger.info(f"Found {len(previous_ids)} previous message IDs for context in follow-up")
+            except Exception as e:
+                logger.warning(f"Error handling previous message IDs: {e}")
+            
+            # Prepare search parameters - safely
+            search_params = None
+            try:
+                from silentgem.query_params import QueryParams
+                search_params = QueryParams(
+                    query=getattr(interpretation, "processed_query", None) or query,
+                    limit=20,
+                    chat_id=chat_id if chat_id and not getattr(interpretation, "cross_chats", False) else None,
+                    time_period=getattr(interpretation, "time_period", None)
+                )
+            except Exception as e:
+                logger.warning(f"Error preparing search parameters: {e}")
+                # Fallback to minimal search params
+                from silentgem.query_params import QueryParams
+                search_params = QueryParams(
+                    query=query,
+                    limit=20,
+                    chat_id=chat_id
+                )
+            
+            # Execute search - safely
+            messages = []
+            try:
+                start_time = time.time()
+                messages = await get_search_engine().search(search_params)
+                search_time = time.time() - start_time
+                logger.info(f"Search completed in {search_time:.2f}s, found {len(messages)} results")
+            except Exception as e:
+                logger.warning(f"Error executing search: {e}")
+            
+            # Convert any non-dict messages to dicts to prevent errors
+            safe_messages = []
+            try:
+                for msg in messages:
+                    if isinstance(msg, dict) and hasattr(msg, 'get'):
+                        safe_messages.append(msg)
+                    else:
+                        # Create a safe dict representation
+                        msg_dict = {}
+                        # Try to extract common fields
+                        if hasattr(msg, 'id'):
+                            msg_dict['id'] = msg.id
+                        else:
+                            msg_dict['id'] = f"unknown-{len(safe_messages)}"
+                            
+                        if hasattr(msg, 'text'):
+                            msg_dict['text'] = msg.text
+                        else:
+                            msg_dict['text'] = str(msg) if hasattr(msg, '__str__') else "Unknown content"
+                            
+                        if hasattr(msg, 'chat') and hasattr(msg.chat, 'id'):
+                            msg_dict['source_chat_id'] = str(msg.chat.id)
+                            msg_dict['target_chat_id'] = str(msg.chat.id)
+                            
+                        if hasattr(msg, 'from_user') and hasattr(msg.from_user, 'first_name'):
+                            msg_dict['sender_name'] = msg.from_user.first_name
+                        else:
+                            msg_dict['sender_name'] = "Unknown"
+                            
+                        if hasattr(msg, 'date'):
+                            try:
+                                msg_dict['timestamp'] = int(msg.date.timestamp())
+                            except:
+                                msg_dict['timestamp'] = int(time.time())
+                        else:
+                            msg_dict['timestamp'] = int(time.time())
+                            
+                        safe_messages.append(msg_dict)
+            except Exception as e:
+                logger.warning(f"Error converting messages to safe format: {e}")
+                # Worst case, just use an empty list
+                safe_messages = []
+            
+            # Organize messages by chat for better context - safely
+            chat_messages_map = {}
+            try:
+                for msg in safe_messages:
+                    chat_id_key = msg.get('target_chat_id') or msg.get('source_chat_id')
+                    if chat_id_key:
+                        if chat_id_key not in chat_messages_map:
+                            chat_messages_map[chat_id_key] = []
+                        chat_messages_map[chat_id_key].append(msg)
+            except Exception as e:
+                logger.warning(f"Error organizing messages by chat: {e}")
+            
+            # Format results with enhanced context - safely
+            response = ""
+            try:
+                response = await format_search_results(
+                    messages=safe_messages,
+                    query=query,
+                    parsed_query={"processed_query": getattr(interpretation, "processed_query", None), 
+                                  "time_period": getattr(interpretation, "time_period", None)},
+                    verbosity=verbosity,
+                    include_quotes=include_quotes,
+                    include_timestamps=include_timestamps,
+                    include_sender_info=include_sender_info,
+                    include_channel_info=include_channel_info,
+                    chat_messages_map=chat_messages_map,
+                    conversation_history=conversation_history
+                )
+            except Exception as e:
+                logger.error(f"Error formatting search results: {e}")
+                # Fallback to basic response
+                if safe_messages:
+                    response = f"Found {len(safe_messages)} messages matching '{query}'"
+                    for i, msg in enumerate(safe_messages[:5]):
+                        response += f"\n\n{i+1}. {msg.get('text', 'No text content')}"
+                else:
+                    response = f"No messages found matching '{query}'"
+            
+            # Update conversation context - safely
+            try:
+                if chat_id and user_id:
+                    message_ids = []
+                    for msg in safe_messages:
+                        if msg.get('id'):
+                            message_ids.append(msg.get('id'))
+                    
+                    new_context = {
+                        'last_query': query,
+                        'processed_query': getattr(interpretation, "processed_query", None) or query,
+                        'time_period': getattr(interpretation, "time_period", None),
+                        'previous_message_ids': message_ids,
+                        'last_updated': int(time.time())
+                    }
+                    self.conversation_memory.update_context(chat_id, user_id, new_context)
+            except Exception as e:
+                logger.warning(f"Error updating conversation context: {e}")
+            
+            # Add assistant response to conversation history - safely
+            try:
+                if chat_id and user_id:
+                    self.conversation_memory.add_message(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        role="assistant",
+                        content=response
                     )
-                    no_results_msg += suggest_msg
-                
-                if callback:
-                    callback(no_results_msg.format(query))
-                return no_results_msg.format(query)
+            except Exception as e:
+                logger.warning(f"Error adding assistant response to conversation: {e}")
+            
+            # Handle case where no results found - safely
+            if not safe_messages:
+                try:
+                    no_results_msg = "📭 No messages found matching your query: '{}'."
+                    
+                    # Suggest alternatives if this is a follow-up with no results
+                    if is_followup:
+                        suggest_msg = (
+                            "\n\nThis follow-up question didn't match any results. "
+                            "Try rephrasing or asking a different question."
+                        )
+                        no_results_msg += suggest_msg
+                    
+                    if callback:
+                        callback(no_results_msg.format(query))
+                    return no_results_msg.format(query)
+                except Exception as e:
+                    logger.warning(f"Error handling no results case: {e}")
+                    return f"No results found for '{query}'"
             
             # Return the final formatted response
             if callback:
-                callback(response)
+                try:
+                    callback(response)
+                except Exception as e:
+                    logger.warning(f"Error sending callback with response: {e}")
             return response
             
         except Exception as e:
             logger.error(f"Error processing query: {e}", exc_info=True)
             error_msg = f"❌ Sorry, I encountered an error while processing your query: {str(e)}"
             if callback:
-                callback(error_msg)
+                try:
+                    callback(error_msg)
+                except:
+                    pass
             return error_msg
     
     def _is_related_query(self, current_query: str, previous_query: str) -> bool:

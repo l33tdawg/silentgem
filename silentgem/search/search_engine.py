@@ -337,8 +337,42 @@ Respond with a JSON object in this format:
                 return [query]
                 
             try:
-                # Parse the JSON response
-                parsed_response = json.loads(response)
+                # First try to parse the raw response
+                try:
+                    parsed_response = json.loads(response)
+                except json.JSONDecodeError:
+                    # If that fails, try to extract JSON using regex
+                    logger.warning("Initial JSON parsing failed, trying to extract JSON with regex")
+                    json_match = re.search(r'({[\s\S]*})', response)
+                    if json_match:
+                        json_str = json_match.group(1)
+                        try:
+                            parsed_response = json.loads(json_str)
+                        except json.JSONDecodeError:
+                            # Last resort: strip any extra text that might be after the JSON
+                            # Sometimes LLMs add explanations after the JSON
+                            logger.warning("Regex extraction failed, trying to clean up the JSON")
+                            lines = json_str.split('\n')
+                            # Find where the closing brace is and keep only up to that point
+                            for i, line in enumerate(lines):
+                                if '}' in line:
+                                    cleaned_json = '\n'.join(lines[:i+1])
+                                    # Make sure we include the closing brace
+                                    if not cleaned_json.strip().endswith('}'):
+                                        cleaned_json = cleaned_json + '}'
+                                    try:
+                                        parsed_response = json.loads(cleaned_json)
+                                        break
+                                    except:
+                                        pass
+                            else:
+                                # If we got here, we failed to parse the JSON
+                                logger.error(f"Failed to parse LLM response after cleanup attempts: {response}")
+                                return [query]
+                    else:
+                        # No JSON-like content found
+                        logger.error(f"No JSON found in LLM response: {response}")
+                        return [query]
                 
                 expanded_terms = parsed_response.get("expanded_terms", [])
                 key_concepts = parsed_response.get("key_concepts", [])
