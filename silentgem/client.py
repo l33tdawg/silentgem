@@ -679,50 +679,70 @@ class SilentGemClient:
         logger.info("Stopping SilentGem client...")
         print("🛑 Stopping SilentGem client...")
         
+        # Set running flag to False immediately
+        self._running = False
+        
+        # Set force shutdown flag
+        self._force_shutdown = True
+        
+        # Signal shutdown through future if it exists
+        if hasattr(self, '_shutdown_future') and not self._shutdown_future.done():
+            self._shutdown_future.set_result(None)
+        
         # Cancel all pending tasks
         for task_name, task in list(self._tasks.items()):
             if not task.done() and not task.cancelled():
                 logger.debug(f"Cancelling task {task_name}")
                 task.cancel()
                 try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                    # Very short timeout to avoid hanging
+                    await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass  # Expected during cancellation
+                except Exception as e:
+                    logger.error(f"Error cancelling task {task_name}: {e}")
         
         self._tasks.clear()
 
         try:
-            # Stop the client
-            if self.client.is_connected:
-                await self.client.stop()
-                logger.info("Client stopped successfully")
-                print("✅ Client stopped successfully")
+            # Stop the client with a timeout
+            if hasattr(self, 'client') and self.client:
+                if getattr(self.client, 'is_connected', False):
+                    try:
+                        # Use a very short timeout to avoid hanging
+                        await asyncio.wait_for(self.client.stop(), timeout=1.0)
+                        logger.info("Client stopped successfully")
+                        print("✅ Client stopped successfully")
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        logger.warning("Client stop timed out, proceeding anyway")
+                        print("⚠️ Client stop timed out, proceeding anyway")
+                    except Exception as e:
+                        logger.error(f"Error stopping client: {e}")
+                        print(f"❌ Error stopping client: {e}")
+                else:
+                    logger.info("Client was not running, nothing to stop")
             else:
-                logger.info("Client was not running, nothing to stop")
-                try:
-                    await self.client.stop()
-                    logger.info("Client stopped successfully")
-                    print("✅ Client stopped successfully")
-                except Exception as e:
-                    logger.error(f"Error stopping client: {e}")
-                    print(f"❌ Error stopping client: {e}")
+                logger.info("No client instance to stop")
         
         except Exception as e:
             logger.error(f"Error stopping client: {e}")
             print(f"❌ Error stopping client: {e}")
         
+        # Ensure running flag is set to False
         self._running = False
         logger.info("SilentGem client stopped")
+        
+        return self  # Return self to allow method chaining
 
     async def stop_client(self):
         """Stop the client and clean up"""
+        # Call the updated stop method which now returns self
         await self.stop()
         
         # Clear any resources
         self.chat_mapping = {}
         
-        # Set running flag to False
-        self._running = False
+        # Both _running and _force_shutdown flags are already set in stop()
         
         return self
     
@@ -960,6 +980,14 @@ def get_client():
             logger.error(f"Error creating SilentGemClient: {e}")
             
     return _instance
+
+def _clear_instance():
+    """Clear the global client instance"""
+    global _instance
+    if _instance is not None:
+        logger.info("Clearing SilentGemClient instance")
+        _instance = None
+    return True
 
 # Add function to cleanly start the client
 async def start_client():
