@@ -19,6 +19,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - Update translation engines without redoing full setup
 - Chat Insights for searching and analyzing conversation history (NEW in v1.1)
 - Cross-chat contextual analysis for deeper insights (NEW in v1.2)
+- Conversational, ChatGPT-like responses to queries (NEW in v1.2)
 
 ## Requirements
 
@@ -115,7 +116,7 @@ When using Ollama, you can:
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
 
-## Chat Insights Feature (v1.1)
+## Chat Insights Feature
 
 SilentGem includes a powerful Chat Insight feature that allows you to query your conversation history in your translated channels:
 
@@ -125,13 +126,15 @@ Chat Insights automatically stores all translated messages in a local database a
 
 **Important:** Since SilentGem already stores all messages in your local database, the bot does NOT need to be added to your source channels to search or analyze messages. The bot only needs to be present in channels where you want users to be able to issue commands and receive responses.
 
-#### NEW: Cross-Chat Contextual Analysis
+#### Latest Enhancements:
 
-The latest version includes enhanced contextual analysis capabilities:
 - **Cross-chat awareness**: Search and analyze information across all monitored channels
 - **Larger context window**: Get more context around matched messages (15 messages before/after)
 - **Unified insights**: See connections between information from different sources
 - **Smart context organization**: Messages are grouped by chat for better understanding
+- **Conversational responses**: Get natural, ChatGPT-like answers that synthesize information across messages
+- **Topic tracking**: Better handling of questions like "What's the latest in Gaza?" or "What's the status of project X?"
+- **Enhanced question understanding**: Improved pattern recognition for common query types
 
 ### Setting Up Chat Insights
 
@@ -212,16 +215,39 @@ For more detailed documentation on Chat Insights, see `docs/chat_insights.md`
 
 ## Roadmap
 
-### Version 1.3 - Bidirectional Communication
+SilentGem is continuously improving with a focus on making Chat Insights a powerful daily assistant for managing information across channels.
 
-The next version will enable seamless bidirectional communication:
+### Version 1.3 - Conversational Memory (Coming Soon)
 
-- **Reply to Original Messages**: Send replies back to source chats with automatic translation
-  - `/reply [message]` - Reply to the last message in original source chat
-  - `/send [message]` - Send a new message to the original channel
-- **Enhanced Search Capabilities**: Semantic search for concept-based queries
-- **Conversation Summarization**: Get AI-generated summaries of past discussions
-- **Secure & Private**: All features respect your privacy with user-owned data storage
+Priority features planned for the next release:
+- **Conversational Context**: Remember previous interactions for more natural follow-up questions
+- **Interactive Exploration**: Add buttons to responses for expanding details or exploring related topics
+- **Guided Queries**: Get suggestions for follow-up questions related to your current topic
+- **Query Templates**: Save and reuse common search patterns
+
+### Version 1.4 - Proactive Assistant
+
+Transforming from reactive search to proactive assistant:
+- **Topic Alerts**: Set up notifications for topics you care about
+- **Scheduled Digests**: Receive daily or weekly summaries of key discussions
+- **Bidirectional Communication**: Reply to messages from within the chat insights interface
+- **Topic Collections**: Create and organize collections of related information
+
+### Version 1.5 - Knowledge Organization
+
+Building a personal knowledge base from your conversations:
+- **Custom Tagging**: Tag and categorize important messages for easy retrieval
+- **Knowledge Persistence**: Save valuable insights for future reference
+- **Task Extraction**: Identify action items from conversations
+- **Reminder Integration**: Set reminders related to specific discussion topics
+
+### Version 1.6 - Analytics & Visualization
+
+Advanced analytical capabilities:
+- **Sentiment Analysis**: Track the emotional tone of discussions
+- **Topic Mapping**: Visual representation of related topics
+- **Participation Analytics**: Identify key contributors on specific topics
+- **Advanced Search**: Enhanced semantic search with better relevance and speed
 
 ## Author
 

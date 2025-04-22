@@ -12,6 +12,7 @@ import json
 from silentgem.database.message_store import get_message_store
 from silentgem.config.insights_config import get_insights_config
 from silentgem.llm.llm_client import get_llm_client
+from silentgem.query_params import QueryParams
 
 class SearchEngine:
     """Search engine for finding messages in the database"""
@@ -22,7 +23,38 @@ class SearchEngine:
         self.config = get_insights_config()
         self.llm_client = get_llm_client()
     
-    async def search(
+    async def search(self, search_params: QueryParams) -> List[Dict[str, Any]]:
+        """
+        Search for messages using QueryParams object
+        
+        Args:
+            search_params: QueryParams object containing search parameters
+            
+        Returns:
+            List of matching messages
+        """
+        # Extract parameters from QueryParams
+        query = search_params.query
+        chat_ids = [search_params.chat_id] if search_params.chat_id else None
+        time_limit = search_params.get_time_range()
+        strategies = search_params.strategies
+        
+        # Call the original search method with extracted parameters
+        results, _ = await self._search(
+            query=query,
+            chat_ids=chat_ids,
+            sender=search_params.sender,
+            collect_context=True,
+            llm_expand_query=True,
+            max_results=search_params.limit,
+            time_limit=time_limit,
+            strategies=strategies,
+            parsed_query={"processed_query": query, "time_period": search_params.time_period}
+        )
+        
+        return results
+    
+    async def _search(
         self,
         query: str,
         chat_ids: Optional[List[int]] = None,
@@ -74,32 +106,17 @@ class SearchEngine:
             has_expanded_terms = bool(expanded_terms)
         
         # Process OR terms separately
-        # Match patterns like "term1 OR term2" or "term1 OR term2 OR term3"
-        or_terms = re.findall(r'\b(\w+(?:\s+\w+)*)\s+OR\s+(\w+(?:\s+\w+)*)', query)
-        has_or_terms = bool(or_terms)
-        
-        # Flatten the OR terms list
+        # Check if query contains OR operators
+        has_or_terms = " OR " in query
         flat_or_terms = []
+        
         if has_or_terms:
-            for term_pair in or_terms:
-                flat_or_terms.extend(term_pair)
+            # Split by " OR " to get all terms
+            flat_or_terms = query.split(" OR ")
+            flat_or_terms = [term.strip() for term in flat_or_terms if term.strip()]
             
-            # Remove OR terms from the main query for direct search
-            clean_query = query
-            for term_pair in or_terms:
-                pattern = r'\b{}\s+OR\s+{}\b'.format(
-                    re.escape(term_pair[0]), 
-                    re.escape(term_pair[1])
-                )
-                clean_query = re.sub(pattern, '', clean_query)
-            clean_query = clean_query.strip()
-            
-            if clean_query:
-                # Use clean query for direct search
-                direct_search_query = clean_query
-            else:
-                # If all terms were OR terms, use the first one for direct search
-                direct_search_query = flat_or_terms[0] if flat_or_terms else query
+            # First term will be used for direct search
+            direct_search_query = flat_or_terms[0] if flat_or_terms else query
         else:
             direct_search_query = query
         

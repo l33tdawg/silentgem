@@ -35,93 +35,77 @@ class QueryProcessor:
         Returns:
             dict: Extracted parameters for search
         """
-        try:
-            # Basic query preprocessing
-            query_text = query_text.strip()
-            
-            # Initialize result
-            result = {
-                "original_query": query_text,
-                "query_text": None,
-                "time_period": None,
-                "sender": None,
-                "intent": "search",  # Default intent is to search
-                "expanded_terms": [],
-                "search_strategies": ["direct", "semantic"],  # Default strategies
-            }
-            
-            # Extract time period information
-            time_info = self._extract_time_period(query_text)
-            if time_info["time_period"]:
-                result["time_period"] = time_info["time_period"]
-            
-            # Extract sender information
-            sender_match = re.search(r'\bfrom\s+(@?\w+|\".+?\")\b', query_text, re.IGNORECASE)
-            if sender_match:
-                sender = sender_match.group(1)
-                # Remove quotes if present
-                if sender.startswith('"') and sender.endswith('"'):
-                    sender = sender[1:-1]
-                result["sender"] = sender
-                # Remove sender specification from query
-                query_text = re.sub(r'\bfrom\s+(@?\w+|\".+?\")\b', '', query_text, flags=re.IGNORECASE)
-            
-            # Get query processing depth
-            query_depth = self.config.get("query_processing_depth", "standard")
-            
-            # For basic processing, just use the original query with time extraction
-            if query_depth == "basic":
-                # Remove time-related phrases for cleaner query
-                clean_query = self._clean_query(query_text)
-                result["query_text"] = clean_query
-                return result
-            
-            # For standard and detailed processing, use LLM
-            if query_depth in ["standard", "detailed"]:
-                # Check if we should use advanced LLM processing
-                use_advanced_llm = self.config.get("use_advanced_query_processing", True) and self.llm_client
-                
-                if use_advanced_llm:
-                    processed_query = await self._process_with_advanced_llm(query_text, query_depth)
-                    if processed_query:
-                        result.update(processed_query)
-                        return result
-                
-                # Fall back to traditional LLM processing if advanced failed or is disabled
-                # Initialize translator if needed
-                if not self.translator:
-                    self.translator = await create_translator()
-                
-                # Use the same LLM as translation by default
-                use_translation_llm = self.config.get("use_translation_llm", True)
-                
-                if use_translation_llm and self.translator:
-                    # Check if the translator has an async translate method
-                    if hasattr(self.translator, 'translate') and callable(self.translator.translate):
-                        # Process using translation LLM
-                        processed_query = await self._process_with_llm(query_text, query_depth)
-                        if processed_query:
-                            result.update(processed_query)
-                            return result
-                    else:
-                        logger.warning("Translator doesn't have a valid translate method")
-            
-            # Fallback to basic processing if LLM fails
-            clean_query = self._clean_query(query_text)
-            result["query_text"] = clean_query
-            
+        if not query_text or not query_text.strip():
+            return {"original_query": "", "query_text": ""}
+        
+        # Normalize query
+        query_text = query_text.strip()
+        
+        # Store original query
+        result = {"original_query": query_text}
+        
+        # Get processing depth
+        depth = self.config.get("query_processing_depth", "standard")
+        
+        # For depth of none, just use the text as is
+        if depth == "none":
+            result["query_text"] = query_text
             return result
             
-        except Exception as e:
-            logger.error(f"Error processing query: {e}")
-            # Return a minimal result on error
-            return {
-                "original_query": query_text,
-                "query_text": query_text,
-                "time_period": None,
-                "sender": None,
-                "intent": "search"
-            }
+        # Try to initialize the translator if needed
+        if not self.translator:
+            self.translator = await create_translator()
+        
+        # Start with basic parsing
+        basic_parsed = self._parse_query(query_text)
+        
+        # Apply the basic parsing results
+        result.update(basic_parsed)
+            
+        # Use advanced LLM processing if available
+        if depth != "basic" and self.llm_client:
+            try:
+                # First try with advanced LLM method
+                advanced_result = await self._process_with_advanced_llm(query_text, depth)
+                if advanced_result:
+                    # Keep the original query
+                    advanced_result["original_query"] = query_text
+                    
+                    # If basic parsing detected specific intents, preserve them
+                    if basic_parsed.get("intent") == "track_evolution" and basic_parsed.get("query_text"):
+                        advanced_result["intent"] = "track_evolution"
+                        
+                    # Merge any missing fields from basic parsing
+                    for key, value in basic_parsed.items():
+                        if key not in advanced_result or not advanced_result[key]:
+                            advanced_result[key] = value
+                    
+                    return advanced_result
+            except Exception as e:
+                logger.error(f"Error in advanced LLM query processing: {e}")
+         
+        # Fallback: if legacy translator is available, try with it
+        if depth != "basic" and self.translator:
+            try:
+                legacy_result = await self._process_with_llm(query_text, depth)
+                if legacy_result:
+                    # Keep the original query
+                    legacy_result["original_query"] = query_text
+                    
+                    # Merge any missing fields from basic parsing
+                    for key, value in basic_parsed.items():
+                        if key not in legacy_result or not legacy_result[key]:
+                            legacy_result[key] = value
+                            
+                    return legacy_result
+            except Exception as e:
+                logger.error(f"Error in legacy LLM query processing: {e}")
+        
+        # If no NLU results, just use basic parsing results
+        if "query_text" not in result or not result["query_text"]:
+            result["query_text"] = query_text
+            
+        return result
     
     def _clean_query(self, query_text: str) -> str:
         """
@@ -206,7 +190,7 @@ class QueryProcessor:
     
     async def _process_with_advanced_llm(self, query_text: str, depth: str = "standard") -> Optional[Dict[str, Any]]:
         """
-        Process query using the advanced LLM client for enhanced semantic understanding
+        Process query using advanced LLM analysis to extract search parameters
         
         Args:
             query_text: The raw query text
@@ -215,41 +199,66 @@ class QueryProcessor:
         Returns:
             dict: Extracted parameters or None on failure
         """
-        if not self.llm_client:
-            return None
-            
         try:
-            max_tokens = 350 if depth == "detailed" else 250
-            temp = 0.2 if depth == "detailed" else 0.3
+            # Get LLM client
+            llm_client = self.llm_client
+            if not llm_client:
+                logger.warning("LLM client not available for advanced query processing")
+                return None
+            
+            # Determine temperature and max tokens based on depth
+            if depth == "detailed":
+                temp = 0.2
+                max_tokens = 800
+            else:
+                temp = 0.1
+                max_tokens = 500
             
             # Construct system prompt based on depth
             if depth == "standard":
-                system_prompt = """You are an advanced query analyzer for a chat search system that helps users find messages and insights in conversation history. 
-Your task is to analyze the search query and extract key information that will help the search engine find the most relevant results.
+                system_prompt = """You are an advanced query analyzer for a conversational chat search system that helps users find messages and understand discussions across multiple channels.
 
-Focus on identifying:
-1. The core search terms - what the user is actually searching for
-2. Expanded terms - semantically related concepts that might appear in relevant messages
-3. Search strategies that would be most effective
+Your task is to analyze the user's request and extract the key information needed to find relevant content, while also understanding the conversational intent behind the query.
+
+The user may be asking about:
+- Specific topics, events, or facts mentioned in conversations
+- What someone said about a particular subject
+- Recent developments on a topic
+- The status of a project or situation
+- Comparisons between different viewpoints
+- Summaries of discussions
 
 Respond with a JSON object containing:
-- processed_query: The main search terms
-- expanded_terms: 3-5 semantically related terms/phrases
+- processed_query: The main search terms most likely to appear in relevant messages
+- expanded_terms: 5-8 semantically related terms that might appear in relevant messages
 - search_strategies: Array of strategies in priority order ["direct", "semantic", "fuzzy"]
 - time_period: Time period mentioned (today, yesterday, week, month, null)
 - sender: Person who sent the message mentioned (null if none)
-- intent: The search intent (search, summarize, analyze)
+- intent: The search intent (search, summarize, analyze, compare, track_evolution)
+
+IMPORTANT: Focus on identifying terms that would actually appear in messages about this topic, not just conceptually related terms.
 """
             else:  # detailed
-                system_prompt = """You are an advanced query analyzer for a chat search system that helps users find messages and insights in conversation history.
-Your task is to analyze the search query and extract key information that will help the search engine find the most relevant results.
+                system_prompt = """You are an advanced query analyzer for a conversational chat search system that helps users find messages and understand discussions across multiple channels.
+
+Your task is to analyze the search query and extract key information that will help find the most relevant messages, while understanding the deeper conversational intent behind the query.
+
+The user may be asking about:
+- Specific topics, events, or facts mentioned in conversations
+- What someone said about a particular subject
+- Recent developments on a topic
+- The status of a project or situation
+- Comparisons between different viewpoints
+- Summaries of discussions
+- Insights across multiple conversations
 
 Focus on identifying:
-1. The core search terms - what the user is actually searching for
+1. The core search terms - what would actually appear in messages about this topic
 2. Expanded terms - semantically related concepts that might appear in relevant messages
 3. Alternative phrasings - different ways people might express the same ideas
 4. Related entities - people, organizations, products, concepts related to the search
 5. Search strategies that would be most effective
+6. The conversational intent behind the query - what the user really wants to know
 
 Respond with a JSON object containing:
 - processed_query: The main search terms
@@ -259,11 +268,11 @@ Respond with a JSON object containing:
 - search_strategies: Array of strategies in priority order ["direct", "semantic", "fuzzy"]
 - time_period: Time period mentioned (today, yesterday, week, month, null)
 - sender: Person who sent the message mentioned (null if none)
-- intent: The search intent (search, summarize, analyze, compare)
+- intent: The search intent (search, summarize, analyze, compare, track_evolution, identify_sentiment)
 """
             
             # Process with LLM
-            response = await self.llm_client.chat_completion([
+            response = await llm_client.chat_completion([
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Query: {query_text}"}
             ], temperature=temp, max_tokens=max_tokens)
@@ -284,21 +293,54 @@ Respond with a JSON object containing:
                     
                     # Build a final result dictionary
                     final_result = {
-                        "query_text": result.get("processed_query", query_text),
+                        "query_text": query_text,  # Default to original query
                         "original_query_text": query_text,
-                        "expanded_terms": result.get("expanded_terms", []),
-                        "search_strategies": result.get("search_strategies", ["direct", "semantic"]),
-                        "time_period": result.get("time_period"),
-                        "sender": result.get("sender"),
-                        "intent": result.get("intent", "search"),
+                        "expanded_terms": [],
+                        "search_strategies": ["direct", "semantic"],
+                        "time_period": None,
+                        "sender": None,
+                        "intent": "search",
                     }
+                    
+                    # Get processed query and ensure it's a string
+                    processed_query = result.get("processed_query", query_text)
+                    if processed_query is not None:
+                        if isinstance(processed_query, list):
+                            processed_query = " ".join([str(item) for item in processed_query if item is not None])
+                        elif not isinstance(processed_query, str):
+                            processed_query = str(processed_query)
+                        final_result["query_text"] = processed_query
+                    
+                    # Add expanded terms if present
+                    if "expanded_terms" in result:
+                        expanded_terms = result["expanded_terms"]
+                        if expanded_terms and isinstance(expanded_terms, list):
+                            final_result["expanded_terms"] = [str(term) for term in expanded_terms if term is not None]
+                    
+                    # Add other fields if present
+                    if "search_strategies" in result:
+                        final_result["search_strategies"] = result["search_strategies"]
+                    if "time_period" in result:
+                        final_result["time_period"] = result["time_period"]
+                    if "sender" in result:
+                        final_result["sender"] = result["sender"]
+                    if "intent" in result:
+                        final_result["intent"] = result["intent"]
                     
                     # Add additional fields if present (for detailed mode)
                     if "alternative_phrasings" in result:
-                        final_result["alternative_phrasings"] = result["alternative_phrasings"]
+                        alt_phrasings = result["alternative_phrasings"]
+                        if alt_phrasings and isinstance(alt_phrasings, list):
+                            final_result["alternative_phrasings"] = [str(phrase) for phrase in alt_phrasings if phrase is not None]
+                        else:
+                            final_result["alternative_phrasings"] = alt_phrasings
                     
                     if "related_entities" in result:
-                        final_result["related_entities"] = result["related_entities"]
+                        related_entities = result["related_entities"]
+                        if related_entities and isinstance(related_entities, list):
+                            final_result["related_entities"] = [str(entity) for entity in related_entities if entity is not None]
+                        else:
+                            final_result["related_entities"] = related_entities
                     
                     # Build a comprehensive search query if requested
                     use_expanded_query = self.config.get("use_expanded_query", True)
@@ -322,6 +364,8 @@ Respond with a JSON object containing:
                         
                         # Create OR query
                         if len(expanded_query_parts) > 1:
+                            # Ensure all parts are strings before joining
+                            expanded_query_parts = [str(part) for part in expanded_query_parts if part is not None]
                             final_result["query_text"] = " OR ".join(expanded_query_parts)
                             logger.info(f"Expanded query: {final_result['query_text']}")
                     
@@ -472,6 +516,8 @@ Respond with a JSON object containing:
                             if use_expanded_query and expanded_terms:
                                 # Create OR query combining original and expanded terms
                                 all_terms = [processed_query] + expanded_terms
+                                # Ensure all terms are strings before joining
+                                all_terms = [str(term) for term in all_terms if term is not None]
                                 final_result["query_text"] = " OR ".join(all_terms)
                                 logger.info(f"Enhanced search query: {final_result['query_text']}")
                     
@@ -486,6 +532,90 @@ Respond with a JSON object containing:
             logger.error(f"Error processing query with legacy LLM: {e}")
             return None
 
+    def _parse_query(self, query_text: str) -> Dict[str, Any]:
+        """
+        Basic parsing of query text without LLM
+        
+        Args:
+            query_text: The raw query text
+            
+        Returns:
+            dict: Extracted parameters
+        """
+        result = {"original_query": query_text}
+        
+        # Extract time period
+        time_period = None
+        
+        # Check for time periods
+        query_lower = query_text.lower()
+        if "today" in query_lower:
+            time_period = "today"
+        elif "yesterday" in query_lower:
+            time_period = "yesterday"
+        elif "this week" in query_lower or "past week" in query_lower or "last week" in query_lower:
+            time_period = "week"
+        elif "this month" in query_lower or "past month" in query_lower or "last month" in query_lower:
+            time_period = "month"
+        
+        result["time_period"] = time_period
+        
+        # Determine intention - default to search
+        intent = "search"
+        
+        # Check for summarization intent
+        if any(term in query_lower for term in ["summarize", "summary", "overview"]):
+            intent = "summarize"
+        # Check for analysis intent
+        elif any(term in query_lower for term in ["analyze", "analysis", "explain", "understand"]):
+            intent = "analyze"
+        # Check for tracking intent
+        elif any(term in query_lower for term in ["track", "follow", "development", "update", "latest", "current", "status"]):
+            intent = "track_evolution"
+        # Check for comparison intent
+        elif any(term in query_lower for term in ["compare", "difference", "versus", "vs"]):
+            intent = "compare"
+        
+        result["intent"] = intent
+        
+        # Extract entity information
+        sender = None
+        
+        # Check for common query patterns
+        if "what did " in query_lower:
+            # Extract person after "what did" and before the next word
+            sender_match = re.search(r"what did ([a-zA-Z\s]+) (say|talk|mention|post)", query_lower)
+            if sender_match:
+                sender = sender_match.group(1).strip()
+        
+        elif "who (said|talked|spoke|posted)" in query_lower:
+            # Just identify this as a person search, let the LLM handle details
+            result["search_mode"] = "person"
+        
+        # Handle common status queries
+        if any(pattern in query_lower for pattern in ["what's the latest", "what is the latest", "status of", "update on"]):
+            # Extract the topic they're asking about
+            topic_match = None
+            
+            if "latest in " in query_lower or "latest on " in query_lower:
+                topic_match = re.search(r"latest (in|on) ([a-zA-Z0-9\s]+)", query_lower)
+            elif "status of " in query_lower:
+                topic_match = re.search(r"status of ([a-zA-Z0-9\s]+)", query_lower)
+            elif "update on " in query_lower:
+                topic_match = re.search(r"update on ([a-zA-Z0-9\s]+)", query_lower)
+            
+            if topic_match:
+                topic = topic_match.group(2).strip()
+                result["query_text"] = topic
+                result["intent"] = "track_evolution"
+                
+                # Set an appropriate time period if none was specified
+                if not time_period:
+                    result["time_period"] = "week"
+        
+        result["sender"] = sender
+        
+        return result
 
 # Singleton instance
 _instance = None
