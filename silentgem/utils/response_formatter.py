@@ -254,108 +254,70 @@ async def _format_with_llm(
     conversation_history: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
-    Format search results using LLM for improved summarization and insights
-    
-    Args:
-        messages: List of message dictionaries from search results
-        query: Original search query
-        parsed_query: Parsed query with metadata
-        translator: Optional translation function
-        verbosity: Verbosity level ("concise", "standard", or "detailed")
-        include_quotes: Whether to include quotes in the response
-        include_timestamps: Whether to include timestamps
-        include_sender_info: Whether to include sender information
-        include_channel_info: Whether to include channel information
-        context_messages: Additional context messages from the conversation history
-        chat_messages_map: Dictionary mapping chat IDs to lists of messages, for better organization
-        conversation_history: Conversation history for follow-up awareness
-        
-    Returns:
-        Formatted response string
+    Format results using LLM for conversational responses, using internally grouped messages for context.
     """
-    if not messages:
-        return "No messages found matching your query."
-    
-    # Get LLM client
-    llm_client = get_llm_client()
-    if not llm_client:
-        logger.warning("LLM client not available, falling back to simple formatting")
-        return _format_simple_fallback(messages, query)
-    
     try:
-        # First make sure all messages are dicts with proper get method
+        llm_client = get_llm_client()
+        if not llm_client:
+            logger.warning("LLM client not available for LLM formatting")
+            # Fallback needs sanitized messages - attempt sanitization here too
+            sanitized_fallback_messages = [] 
+            for msg in messages:
+                if isinstance(msg, dict): sanitized_fallback_messages.append(msg)
+                # Add basic conversion if needed, similar to below
+            return _format_simple_fallback(sanitized_fallback_messages, query)
+
+        # --- START: Sanitize the input 'messages' list --- 
         safe_messages = []
-        for msg in messages:
-            # If it's already a dict with get method
-            if isinstance(msg, dict) and hasattr(msg, 'get'):
-                safe_messages.append(msg)
-            else:
-                # For any other object type (like Message objects), convert to dict
-                msg_dict = {}
-                
-                # Extract common fields with safe attribute access
-                if hasattr(msg, 'id'):
-                    msg_dict['id'] = msg.id
-                
-                if hasattr(msg, 'text'):
-                    msg_dict['text'] = msg.text
-                    msg_dict['content'] = msg.text  # Duplicate for compatibility
-                elif hasattr(msg, 'content'):
-                    msg_dict['content'] = msg.content
-                    msg_dict['text'] = msg.content  # Duplicate for compatibility
-                
-                # Extract chat info
-                if hasattr(msg, 'chat') and hasattr(msg.chat, 'id'):
-                    msg_dict['chat_id'] = str(msg.chat.id)
-                    msg_dict['source_chat_id'] = str(msg.chat.id)
-                    msg_dict['target_chat_id'] = str(msg.chat.id)
-                    if hasattr(msg.chat, 'title'):
-                        msg_dict['chat_title'] = msg.chat.title
-                
-                # Extract sender info
-                if hasattr(msg, 'from_user'):
-                    sender_name = getattr(msg.from_user, 'first_name', 'Unknown')
-                    if hasattr(msg.from_user, 'last_name') and msg.from_user.last_name:
-                        sender_name += f" {msg.from_user.last_name}"
-                    msg_dict['sender_name'] = sender_name
-                    msg_dict['sender'] = sender_name
-                
-                # Extract timestamp
-                if hasattr(msg, 'date'):
+        try:
+            for msg in messages:
+                msg_dict = None
+                if isinstance(msg, dict):
+                    msg_dict = msg
+                elif hasattr(msg, 'id') and hasattr(msg, 'text') and hasattr(msg, 'chat'):
                     try:
-                        if hasattr(msg.date, 'timestamp'):
-                            msg_dict['timestamp'] = int(msg.date.timestamp())
-                        else:
-                            msg_dict['timestamp'] = int(time.time())
-                    except:
-                        msg_dict['timestamp'] = int(time.time())
+                        msg_dict = {
+                            'id': msg.id,
+                            'text': msg.text or getattr(msg, 'content', ''),
+                            'source_chat_id': str(getattr(msg.chat, 'id', 'unknown')),
+                            'target_chat_id': str(getattr(msg.chat, 'id', 'unknown')),
+                            'chat_id': str(getattr(msg.chat, 'id', 'unknown')), # Add chat_id for grouping
+                            'sender_name': getattr(getattr(msg, 'from_user', None), 'first_name', 'Unknown'),
+                            'timestamp': int(getattr(msg, 'date', datetime.now()).timestamp()) if hasattr(msg, 'date') else int(time.time()),
+                            'content': msg.text or getattr(msg, 'content', ''),
+                            'sender': getattr(getattr(msg, 'from_user', None), 'first_name', 'Unknown'),
+                            'date': getattr(msg, 'date', datetime.now()).isoformat() if hasattr(msg, 'date') else datetime.now().isoformat(),
+                            'chat_title': getattr(getattr(msg, 'chat', None), 'title', 'Unknown Chat')
+                        }
+                    except Exception as convert_err:
+                        logger.warning(f"Failed to convert message-like object to dict in _format_with_llm: {convert_err}. Object: {type(msg)}")
+                        msg_dict = None
                 else:
-                    msg_dict['timestamp'] = int(time.time())
-                
-                # Add to safe messages
-                safe_messages.append(msg_dict)
-        
-        # Use the safe messages instead of the original ones
-        messages = safe_messages
-        
-        # Organize messages by chat group
+                    logger.warning(f"Unexpected object type encountered in _format_with_llm input: {type(msg)}. Skipping.")
+                    
+                if isinstance(msg_dict, dict):
+                    safe_messages.append(msg_dict)
+        except Exception as e:
+            logger.error(f"Error during message sanitization loop in _format_with_llm: {e}")
+            # If sanitization fails badly, fallback is the only option
+            return _format_simple_fallback(messages, query) # Use original messages for fallback if sanitization failed
+        # --- END: Sanitize the input 'messages' list ---
+
+        # Now, create chat_groups using the sanitized safe_messages
         chat_groups = defaultdict(list)
-        for msg in messages:
+        for msg in safe_messages: # Use safe_messages here
+            # Ensure msg is a dict (should be guaranteed by above loop, but double-check)
+            if not isinstance(msg, dict):
+                 logger.warning(f"Non-dict object found in safe_messages: {type(msg)}")
+                 continue 
+                 
             chat_id = msg.get("chat_id") or msg.get("source_chat_id") or msg.get("target_chat_id")
             if chat_id:
-                # Check for match_type - useful for explaining how the message was found
-                match_type = msg.get("match_type", "direct")
-                matched_term = msg.get("matched_term", query)
-                
-                # Add match info to the message
-                msg["match_info"] = {
-                    "type": match_type,
-                    "term": matched_term
-                }
-                
+                # Add match info if available (you might need to pass this info differently now)
+                # msg["match_info"] = { ... } # Placeholder - match info might need to come from elsewhere
                 chat_groups[chat_id].append(msg)
-        
-        # Format timestamps based on user preference
+
+        # Helper to format timestamps
         def format_time(timestamp):
             if not timestamp:
                 return ""
@@ -368,167 +330,99 @@ async def _format_with_llm(
                         timestamp = datetime.fromtimestamp(float(timestamp))
                     except (ValueError, TypeError):
                         return timestamp
+            elif isinstance(timestamp, (int, float)):
+                try:
+                    timestamp = datetime.fromtimestamp(timestamp)
+                except (OSError, ValueError):
+                    return str(timestamp)
             
-            if isinstance(timestamp, (int, float)):
-                timestamp = datetime.fromtimestamp(timestamp)
-                
             if isinstance(timestamp, datetime):
                 return timestamp.strftime("%Y-%m-%d %H:%M:%S")
             
             return str(timestamp)
-        
-        # Build the prompt for the LLM - enhancing for more conversational responses
+
+        # Build the prompt for the LLM
         system_prompt = f"""You are an intelligent chat assistant analyzing conversation history for a user.
 
 Your task is to provide a natural, conversational response to the user's query: "{query}"
 
-Rather than just showing search results, you should synthesize information from the messages into a cohesive answer that directly addresses the user's query. You are having a conversation with the user, not just returning search results.
+Synthesize information from the messages provided into a cohesive answer.
 
 Context:
-- You have access to message history across multiple chat channels
-- These messages were retrieved based on their relevance to the user's query
-- Some messages match the query directly, others through semantic matching
-- The user wants insights and understanding, not just raw data
-- Consider the chronology of messages to understand how topics evolved
+- Messages are grouped by chat channel.
+- Consider the chronology within each channel.
 
 Guidelines:
-1. Be conversational and natural in your response - as if you're having a direct conversation
-2. Synthesize information across messages to form a coherent answer
-3. Address the user's question directly rather than just listing what was found
-4. Include specific details and quotes when they directly support your answer
-5. If discussing multiple perspectives, present them in a balanced way
-6. When appropriate, analyze trends or patterns in the conversation
-7. Don't just list messages - create an informative narrative
-8. Never say "I found X messages" - focus on the content and insights instead
-9. When referring to messages or their sources, do so naturally within your response
-10. For time-based queries, consider the chronology of information
+1. Be conversational and natural.
+2. Synthesize information across messages.
+3. Address the user's question directly.
+4. Include key details/quotes.
+5. Don't just list messages - create a narrative.
+6. Never say "I found X messages".
 
-Your response should feel like a knowledgeable friend answering a question, not a search engine returning results."""
+Your response should feel like a knowledgeable friend answering a question."""
 
         # Add context about verbosity
         if verbosity == "concise":
-            system_prompt += "\nKeep your response brief and focused on the most important information - 2-3 sentences at most."
+            system_prompt += "\nKeep your response brief and focused - 2-3 sentences max."
         elif verbosity == "detailed":
-            system_prompt += "\nProvide a comprehensive answer that explores nuances, connections between information sources, and offers deeper analysis."
+            system_prompt += "\nProvide a comprehensive answer exploring nuances and connections."
         else:  # standard
-            system_prompt += "\nProvide a balanced response that covers the key information without unnecessary details."
+            system_prompt += "\nProvide a balanced response covering key information."
 
         prompt_parts = []
         prompt_parts.append(f"## User Query: \"{query}\"")
         
-        # Add context about expanded search terms
         if parsed_query and parsed_query.get("expanded_queries"):
-            expanded_terms = parsed_query.get("expanded_queries", [])
-            prompt_parts.append(f"\n## Related Concepts: {', '.join(expanded_terms)}")
-        
-        # Add matched messages section with improved organization
+             expanded_terms = parsed_query.get("expanded_queries", [])
+             prompt_parts.append(f"\n## Related Concepts Searched: {', '.join(expanded_terms)}")
+
+        # Add messages using the internally created chat_groups
         if chat_groups:
-            prompt_parts.append("\n## Messages by Chat Channel:")
+            prompt_parts.append("\n## Relevant Messages by Channel:")
             
             for chat_id, msgs in chat_groups.items():
-                # Get chat title or default to chat ID
-                chat_name = None
-                for msg in msgs:
-                    if msg.get("chat_title"):
-                        chat_name = msg.get("chat_title")
-                        break
-                
-                if not chat_name:
-                    chat_name = f"Chat {chat_id}"
-                    
-                prompt_parts.append(f"\n### Channel: {chat_name}")
-                
-                # Sort messages by timestamp to preserve conversation flow
-                msgs.sort(key=lambda m: m.get("timestamp", 0))
-                
-                # Add messages
-                for msg in msgs:
-                    # Format message content
-                    content = msg.get("content", "").strip() or msg.get("text", "").strip()
-                    if not content:
-                        content = "[Non-text content]"
-                    
-                    # Get sender info
-                    sender = msg.get("sender_name", "Unknown") or msg.get("sender", "Unknown")
-                    
-                    # Get timestamp
-                    timestamp_str = ""
-                    if include_timestamps and (msg.get("timestamp") or msg.get("date")):
-                        timestamp_value = msg.get("timestamp") or msg.get("date")
-                        timestamp_str = f" [{format_time(timestamp_value)}]"
-                    
-                    # Format the message for the prompt
-                    formatted_msg = f"- **{sender}{timestamp_str}**: {content}"
-                    prompt_parts.append(formatted_msg)
-                    
-                    # Include context messages if available
-                    if msg.get("context") and True:
-                        prompt_parts.append("\n  **Context messages:**")
-                        for ctx_msg in msg.get("context", []):
-                            ctx_content = ctx_msg.get("content", "").strip() or ctx_msg.get("text", "").strip()
-                            if not ctx_content:
-                                continue
-                                
-                            ctx_sender = ctx_msg.get("sender_name", "Unknown") or ctx_msg.get("sender", "Unknown")
-                            ctx_time = ""
-                            if include_timestamps and (ctx_msg.get("timestamp") or ctx_msg.get("date")):
-                                ctx_time_value = ctx_msg.get("timestamp") or ctx_msg.get("date")
-                                ctx_time = f" [{format_time(ctx_time_value)}]"
-                                
-                            ctx_formatted = f"  - **{ctx_sender}{ctx_time}**: {ctx_content}"
-                            prompt_parts.append(ctx_formatted)
-        
-        # Add chat message maps if provided (for better context organization)
-        if chat_messages_map and len(chat_messages_map) > 0:
-            prompt_parts.append("\n## Extended Context by Channel:")
-            
-            for chat_id, chat_msgs in chat_messages_map.items():
-                # Sort by timestamp
-                chat_msgs.sort(key=lambda m: m.get("timestamp", 0))
-                
-                # Get chat title
-                chat_title = None
-                for msg in chat_msgs:
-                    if msg.get("chat_title"):
-                        chat_title = msg.get("chat_title")
-                        break
-                        
-                if not chat_title:
-                    chat_title = f"Chat {chat_id}"
+                # Get chat title from the first message (best effort)
+                chat_title = msgs[0].get("chat_title", f"Chat {chat_id}") if msgs else f"Chat {chat_id}"
                     
                 prompt_parts.append(f"\n### Channel: {chat_title}")
-                prompt_parts.append(f"Conversation flow ({len(chat_msgs)} messages):")
                 
-                # Add messages
-                for msg in chat_msgs:
-                    # Format message content
-                    content = msg.get("content", "").strip() or msg.get("text", "").strip()
-                    if not content:
-                        content = "[Non-text content]"
-                    
-                    # Get sender info
+                # Sort messages by timestamp
+                try:
+                    msgs.sort(key=lambda m: m.get("timestamp", 0))
+                except Exception as sort_err:
+                    logger.warning(f"Could not sort messages for chat {chat_id}: {sort_err}")
+
+                prompt_parts.append(f"Conversation flow ({len(msgs)} messages):")
+                
+                # Add messages for this chat
+                for msg in msgs:
+                    # msg should already be a dict due to sanitization at the start
+                    content = msg.get("content", "").strip() or msg.get("text", "").strip() or "[Non-text content]"
                     sender = msg.get("sender_name", "Unknown") or msg.get("sender", "Unknown")
-                    
-                    # Get timestamp
                     timestamp_str = ""
-                    if include_timestamps and (msg.get("timestamp") or msg.get("date")):
+                    if include_timestamps:
                         timestamp_value = msg.get("timestamp") or msg.get("date")
-                        timestamp_str = f" [{format_time(timestamp_value)}]"
+                        if timestamp_value:
+                            timestamp_str = f" [{format_time(timestamp_value)}]"
                     
-                    # Format the message for the prompt
                     formatted_msg = f"- **{sender}{timestamp_str}**: {content}"
                     prompt_parts.append(formatted_msg)
-        
-        # Add conversation history if provided
-        conversation_context = ""
-        if conversation_history and len(conversation_history) > 1:  # More than just the current query
-            # Extract previous exchanges for context
-            conversation_context = "Previous conversation history:\n"
-            for i, msg in enumerate(conversation_history[:-1]):  # Exclude current query
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")
-                conversation_context += f"{role.capitalize()}: {content}\n"
-        
+        else:
+             prompt_parts.append("\n## Relevant Messages:")
+             prompt_parts.append("(No messages found or processed)")
+
+        # Add conversation history (ensure dicts)
+        if conversation_history and len(conversation_history) > 1:
+            prompt_parts.append("\n## Previous Conversation Context:")
+            for i, msg in enumerate(conversation_history[:-1]):
+                if isinstance(msg, dict):
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    prompt_parts.append(f"{role.capitalize()}: {content}")
+                else:
+                     logger.warning(f"Skipping non-dict item in conversation_history: {type(msg)}")
+
         # Add specific instructions based on verbosity level
         if verbosity == "concise":
             prompt_parts.append("""
@@ -563,11 +457,17 @@ Your response should sound like a knowledgeable friend having a conversation, no
 Never start with phrases like "Based on the messages..." or "I found X messages...".
 Simply answer the user's question directly in a natural, conversational way using the information provided.
 """)
-        
+
         # Build the final prompt
         user_prompt = "\n".join(prompt_parts)
         
-        # Send to LLM with higher temperature for more natural responses
+        # Add safety log for long prompts
+        if len(user_prompt) > 15000: # Arbitrary limit, adjust as needed
+            logger.warning(f"Very long prompt generated for LLM ({len(user_prompt)} chars). Consider reducing context or message count.")
+        elif len(user_prompt) > 8000:
+            logger.debug(f"Prompt length for LLM: {len(user_prompt)} chars.")
+
+        # Send to LLM
         response = await llm_client.chat_completion([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -575,21 +475,25 @@ Simply answer the user's question directly in a natural, conversational way usin
         
         if not response or not response.get("content"):
             logger.warning("Empty response from LLM, falling back to simple formatting")
-            return _format_simple_fallback(messages, query)
+            # Use the sanitized safe_messages for fallback
+            return _format_simple_fallback(safe_messages, query)
         
         llm_response = response.get("content", "").strip()
         
-        # Remove any phrases like "Based on the messages..." that might start the response
-        llm_response = re.sub(r'^(Based on (the|your|these) (messages|search results|information).*?[,.] )', '', llm_response)
-        llm_response = re.sub(r'^(I found|There are) \d+ messages.*?[,.] ', '', llm_response)
+        # Basic post-processing
+        llm_response = re.sub(r'^Based on (the|your|these) (messages|search results|information).*?[,.:]\s*', '', llm_response, flags=re.IGNORECASE)
+        llm_response = re.sub(r'^I found \d+ messages.*?[,.:]\s*', '', llm_response, flags=re.IGNORECASE)
+        llm_response = re.sub(r'^Here is a summary.*?[,.:]\s*', '', llm_response, flags=re.IGNORECASE)
         
         # Add subtle attribution footer
-        footer = "\n\n_Powered by SilentGem_"
-        return llm_response + footer
+        footer = "\n\n*Powered by SilentGem Insights*"
+        # Ensure footer isn't added if response is empty
+        return llm_response + footer if llm_response else "Sorry, I couldn't generate a response based on the information found."
         
     except Exception as e:
-        logger.error(f"Error in LLM formatting: {e}")
-        return _format_simple_fallback(messages, query)
+        logger.error(f"Error in LLM formatting: {e}", exc_info=True)
+        # Use the sanitized safe_messages for fallback
+        return _format_simple_fallback(safe_messages if 'safe_messages' in locals() else messages, query)
 
 def _format_simple_fallback(messages: List[Dict[str, Any]], query: str) -> str:
     """

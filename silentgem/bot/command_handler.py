@@ -7,6 +7,7 @@ import time
 import re
 from typing import Dict, List, Any, Optional, Callable, Tuple
 from loguru import logger
+from datetime import datetime
 
 from silentgem.search.query_processor import get_query_processor
 from silentgem.utils.response_formatter import format_search_results
@@ -105,19 +106,30 @@ class CommandHandler:
             # Get conversation history for context if this is a follow-up question
             conversation_history = None
             conversation_context = {}
+            conversation_history_dicts = [] # Use this list for formatting
             if chat_id and user_id:
                 try:
                     conversation = self.conversation_memory.get_conversation(chat_id, user_id)
-                    conversation_history = self.conversation_memory.get_conversation_history(chat_id, user_id)
+                    # Retrieve history as Message objects
+                    raw_history = self.conversation_memory.get_conversation_history(chat_id, user_id)
                     conversation_context = conversation.context if hasattr(conversation, 'context') else {}
+                    
+                    # Convert Message objects to simple dicts for formatting
+                    for msg in raw_history:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            conversation_history_dicts.append({'role': msg.role, 'content': msg.content})
+                        else:
+                            logger.warning(f"Skipping invalid item in raw_history: {type(msg)}")
+                            
                 except Exception as e:
                     logger.warning(f"Error getting conversation history: {e}")
             
-            # Determine if this is a follow-up question - safely handle potential errors
+            # Determine if this is a follow-up question
             is_followup = False
             try:
-                if conversation_history and len(conversation_history) >= 2:
-                    previous_messages = [msg for msg in conversation_history if isinstance(msg, dict) and msg.get('role') == 'user']
+                # Use the converted dict list for checking
+                if conversation_history_dicts and len(conversation_history_dicts) >= 2:
+                    previous_messages = [msg for msg in conversation_history_dicts if msg.get('role') == 'user']
                     if len(previous_messages) >= 2:
                         is_followup = self._is_related_query(query, previous_messages[-2].get('content', ''))
             except Exception as e:
@@ -127,12 +139,10 @@ class CommandHandler:
             interpretation = None
             try:
                 # If this is a follow-up, include context from the previous query
-                interpretation = await self.query_processor.process_query(
-                    query=query,
-                    include_time=True,
-                    include_inferred_params=True,
-                    context=conversation_context if is_followup else None
-                )
+                # Call the processor. Note: The underlying search.query_processor 
+                # currently doesn't use context or other flags, but the llm bridge accepts them.
+                # We pass only the query for now to avoid TypeErrors with the underlying implementation.
+                interpretation = await self.query_processor.process_query(query)
             except Exception as e:
                 logger.warning(f"Error processing query with NLU: {e}")
                 # Create minimal interpretation
@@ -193,43 +203,40 @@ class CommandHandler:
             safe_messages = []
             try:
                 for msg in messages:
-                    if isinstance(msg, dict) and hasattr(msg, 'get'):
-                        safe_messages.append(msg)
+                    msg_dict = None
+                    if isinstance(msg, dict):
+                        # Already a dictionary, use as is
+                        msg_dict = msg
+                    elif hasattr(msg, 'id') and hasattr(msg, 'text') and hasattr(msg, 'chat'):
+                        # Looks like a Message object (or similar duck type), try converting
+                        try:
+                            msg_dict = {
+                                'id': msg.id,
+                                'text': msg.text or getattr(msg, 'content', ''),
+                                'source_chat_id': str(getattr(msg.chat, 'id', 'unknown')),
+                                'target_chat_id': str(getattr(msg.chat, 'id', 'unknown')),
+                                'sender_name': getattr(getattr(msg, 'from_user', None), 'first_name', 'Unknown'),
+                                'timestamp': int(getattr(msg, 'date', datetime.now()).timestamp()) if hasattr(msg, 'date') else int(time.time()),
+                                # Add any other fields needed by the formatter
+                                'content': msg.text or getattr(msg, 'content', ''),
+                                'sender': getattr(getattr(msg, 'from_user', None), 'first_name', 'Unknown'),
+                                'date': getattr(msg, 'date', datetime.now()).isoformat() if hasattr(msg, 'date') else datetime.now().isoformat(),
+                                'chat_title': getattr(getattr(msg, 'chat', None), 'title', 'Unknown Chat')
+                            }
+                        except Exception as convert_err:
+                            logger.warning(f"Failed to convert message-like object to dict: {convert_err}. Object: {type(msg)}")
+                            msg_dict = None # Ensure it's None if conversion fails
                     else:
-                        # Create a safe dict representation
-                        msg_dict = {}
-                        # Try to extract common fields
-                        if hasattr(msg, 'id'):
-                            msg_dict['id'] = msg.id
-                        else:
-                            msg_dict['id'] = f"unknown-{len(safe_messages)}"
-                            
-                        if hasattr(msg, 'text'):
-                            msg_dict['text'] = msg.text
-                        else:
-                            msg_dict['text'] = str(msg) if hasattr(msg, '__str__') else "Unknown content"
-                            
-                        if hasattr(msg, 'chat') and hasattr(msg.chat, 'id'):
-                            msg_dict['source_chat_id'] = str(msg.chat.id)
-                            msg_dict['target_chat_id'] = str(msg.chat.id)
-                            
-                        if hasattr(msg, 'from_user') and hasattr(msg.from_user, 'first_name'):
-                            msg_dict['sender_name'] = msg.from_user.first_name
-                        else:
-                            msg_dict['sender_name'] = "Unknown"
-                            
-                        if hasattr(msg, 'date'):
-                            try:
-                                msg_dict['timestamp'] = int(msg.date.timestamp())
-                            except:
-                                msg_dict['timestamp'] = int(time.time())
-                        else:
-                            msg_dict['timestamp'] = int(time.time())
-                            
+                        # Unexpected type, log it
+                        logger.warning(f"Unexpected object type encountered in search results: {type(msg)}. Skipping.")
+                        
+                    # Only append if we successfully got or created a dictionary
+                    if isinstance(msg_dict, dict):
                         safe_messages.append(msg_dict)
+                        
             except Exception as e:
-                logger.warning(f"Error converting messages to safe format: {e}")
-                # Worst case, just use an empty list
+                logger.warning(f"Error during message conversion loop: {e}")
+                # Worst case, clear the list to prevent downstream errors
                 safe_messages = []
             
             # Organize messages by chat for better context - safely
@@ -258,7 +265,7 @@ class CommandHandler:
                     include_sender_info=include_sender_info,
                     include_channel_info=include_channel_info,
                     chat_messages_map=chat_messages_map,
-                    conversation_history=conversation_history
+                    conversation_history=conversation_history_dicts # Pass the list of dicts
                 )
             except Exception as e:
                 logger.error(f"Error formatting search results: {e}")
