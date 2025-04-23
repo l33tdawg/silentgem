@@ -324,18 +324,22 @@ class SilentGemClient:
                             logger.error(f"Error storing message in database: {store_error}")
                             print(f"❌ Could not store message: {store_error}")
                             # Continue processing even if storage fails
+                            
+                        # Only update the last message ID if successfully processed
+                        self.mapper.update_last_message_id(chat_id, message.id)
+                        print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     except Exception as e:
                         print(f"❌ Failed to forward media: {e}")
+                        # DO NOT update the last message ID as processing failed
+                        return
                     
-                    # UPDATE: Track message ID for media-only messages too
-                    self.mapper.update_last_message_id(chat_id, message.id)
-                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     return
                 else:
                     logger.debug("Message has no text or caption, ignoring")
                     print("❌ Message has no text or caption, ignoring")
                     
-                    # UPDATE: Still track the message ID even if it has no content
+                    # Still track the message ID if it has no content - this is probably fine to do
+                    # even on error as empty messages don't need translation
                     self.mapper.update_last_message_id(chat_id, message.id)
                     print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     return
@@ -423,12 +427,20 @@ class SilentGemClient:
                             logger.error(f"Error storing message in database: {store_error}")
                             print(f"❌ Could not store message: {store_error}")
                             # Continue processing even if storage fails
+                            
+                        # Only mark as processed if we successfully forwarded the media
+                        self.mapper.update_last_message_id(chat_id, message.id)
+                        print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                     except Exception as e:
                         print(f"❌ Failed to forward media: {e}")
+                        # DO NOT update the last message ID as processing failed
+                        return
                 
-                # UPDATE: Always track message ID
-                self.mapper.update_last_message_id(chat_id, message.id)
-                print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
+                # If we didn't have media to forward, still mark as processed
+                # since we're intentionally skipping very short messages
+                else:
+                    self.mapper.update_last_message_id(chat_id, message.id)
+                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id} (skipped short text)")
                 return
             
             # Detect if the message is likely in English already
@@ -442,207 +454,219 @@ class SilentGemClient:
                 # Optionally, still forward message but with a note that it's original 
                 formatted_message = f"🔠 Original (English) from {sender_name}:\n\n{text}"
                 
-                sent_message = None
-                if media_type:
-                    # Forward media with original caption
-                    if media_type == "photo":
-                        sent_message = await self.client.send_photo(
-                            chat_id=target_chat_id,
-                            photo=message.photo.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "video":
-                        sent_message = await self.client.send_video(
-                            chat_id=target_chat_id,
-                            video=message.video.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "document":
-                        sent_message = await self.client.send_document(
-                            chat_id=target_chat_id,
-                            document=message.document.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "animation":
-                        sent_message = await self.client.send_animation(
-                            chat_id=target_chat_id,
-                            animation=message.animation.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "sticker":
-                        # Stickers can't have captions, so send sticker followed by message
-                        await self.client.send_sticker(
-                            chat_id=target_chat_id,
-                            sticker=message.sticker.file_id
-                        )
+                try:
+                    sent_message = None
+                    if media_type:
+                        # Forward media with original caption
+                        if media_type == "photo":
+                            sent_message = await self.client.send_photo(
+                                chat_id=target_chat_id,
+                                photo=message.photo.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "video":
+                            sent_message = await self.client.send_video(
+                                chat_id=target_chat_id,
+                                video=message.video.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "document":
+                            sent_message = await self.client.send_document(
+                                chat_id=target_chat_id,
+                                document=message.document.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "animation":
+                            sent_message = await self.client.send_animation(
+                                chat_id=target_chat_id,
+                                animation=message.animation.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "sticker":
+                            # Stickers can't have captions, so send sticker followed by message
+                            await self.client.send_sticker(
+                                chat_id=target_chat_id,
+                                sticker=message.sticker.file_id
+                            )
+                            sent_message = await self.client.send_message(
+                                chat_id=target_chat_id,
+                                text=formatted_message
+                            )
+                    else:
+                        # Just a text message
                         sent_message = await self.client.send_message(
                             chat_id=target_chat_id,
-                            text=formatted_message
+                            text=formatted_message,
+                            disable_web_page_preview=True,
                         )
-                else:
-                    # Just a text message
-                    sent_message = await self.client.send_message(
-                        chat_id=target_chat_id,
-                        text=formatted_message,
-                        disable_web_page_preview=True,
-                    )
-                print(f"✅ Original message forwarded to {target_chat_id}")
-                
-                # Store in message database for chat insights
-                try:
-                    # Get message store and config
-                    message_store = get_message_store()
-                    insights_config = get_insights_config()
+                    print(f"✅ Original message forwarded to {target_chat_id}")
                     
-                    # Only store if we're configured to store messages
-                    if insights_config.get("store_full_content", True):
-                        # Handle anonymization if enabled
-                        display_sender = sender_name
-                        if insights_config.get("anonymize_senders", False):
-                            display_sender = "Anonymous"
-                            
-                        # Store the message
-                        message_store.store_message(
-                            message_id=sent_message.id if sent_message else 0,
-                            original_message_id=message.id,
-                            source_chat_id=chat_id,
-                            target_chat_id=target_chat_id,
-                            sender_id=sender_id,
-                            sender_name=display_sender,
-                            content=text,  # Use original content since it wasn't translated
-                            original_content=text,
-                            source_language="english",
-                            target_language="english",
-                            is_media=media_type is not None,
-                            media_type=media_type,
-                            is_forwarded=message.forward_date is not None
-                        )
-                        print(f"📝 Stored message in database for chat insights")
-                except Exception as store_error:
-                    logger.error(f"Error storing message in database: {store_error}")
-                    print(f"❌ Could not store message: {store_error}")
-                    # Continue processing even if storage fails
+                    # Store in message database for chat insights
+                    try:
+                        # Get message store and config
+                        message_store = get_message_store()
+                        insights_config = get_insights_config()
+                        
+                        # Only store if we're configured to store messages
+                        if insights_config.get("store_full_content", True):
+                            # Handle anonymization if enabled
+                            display_sender = sender_name
+                            if insights_config.get("anonymize_senders", False):
+                                display_sender = "Anonymous"
+                                
+                            # Store the message
+                            message_store.store_message(
+                                message_id=sent_message.id if sent_message else 0,
+                                original_message_id=message.id,
+                                source_chat_id=chat_id,
+                                target_chat_id=target_chat_id,
+                                sender_id=sender_id,
+                                sender_name=display_sender,
+                                content=text,  # Use original content since it wasn't translated
+                                original_content=text,
+                                source_language="english",
+                                target_language="english",
+                                is_media=media_type is not None,
+                                media_type=media_type,
+                                is_forwarded=message.forward_date is not None
+                            )
+                            print(f"📝 Stored message in database for chat insights")
+                    except Exception as store_error:
+                        logger.error(f"Error storing message in database: {store_error}")
+                        print(f"❌ Could not store message: {store_error}")
+                        # Continue processing even if storage fails
+                    
+                    # Only update last message ID if everything succeeded
+                    self.mapper.update_last_message_id(chat_id, message.id)
+                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
+                except Exception as e:
+                    print(f"❌ Failed to forward original English message: {e}")
+                    # DO NOT update the last message ID as processing failed
+                    return
                 
-                # UPDATE: Track message ID for skipped translations too
-                self.mapper.update_last_message_id(chat_id, message.id)
-                print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                 return
             
             # Translate the text
             logger.debug(f"Translating text: {text[:50]}...")
             print(f"🧠 Sending to Gemini for translation...")
-            translated_text = await self.translator.translate(text)
-            logger.info(f"Translation complete: {translated_text[:50]}...")
-            print(f"✅ Translation received: {translated_text[:100]}...")
             
-            # Format message with sender info
-            formatted_message = f"🔄 Translated from {sender_name}:\n\n{translated_text}"
-            
-            # Send to target channel - handle differently based on media type
             try:
-                print(f"📤 Sending translation to target chat {target_chat_id}...")
+                translated_text = await self.translator.translate(text)
+                logger.info(f"Translation complete: {translated_text[:50]}...")
+                print(f"✅ Translation received: {translated_text[:100]}...")
                 
-                sent_message = None
-                if media_type:
-                    # Forward media with translated caption
-                    if media_type == "photo":
-                        sent_message = await self.client.send_photo(
-                            chat_id=target_chat_id,
-                            photo=message.photo.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "video":
-                        sent_message = await self.client.send_video(
-                            chat_id=target_chat_id,
-                            video=message.video.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "document":
-                        sent_message = await self.client.send_document(
-                            chat_id=target_chat_id,
-                            document=message.document.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "animation":
-                        sent_message = await self.client.send_animation(
-                            chat_id=target_chat_id,
-                            animation=message.animation.file_id,
-                            caption=formatted_message
-                        )
-                    elif media_type == "sticker":
-                        # Stickers can't have captions, so send sticker followed by translation
-                        await self.client.send_sticker(
-                            chat_id=target_chat_id,
-                            sticker=message.sticker.file_id
-                        )
+                # Format message with sender info
+                formatted_message = f"🔄 Translated from {sender_name}:\n\n{translated_text}"
+                
+                # Send to target channel - handle differently based on media type
+                try:
+                    print(f"📤 Sending translation to target chat {target_chat_id}...")
+                    
+                    sent_message = None
+                    if media_type:
+                        # Forward media with translated caption
+                        if media_type == "photo":
+                            sent_message = await self.client.send_photo(
+                                chat_id=target_chat_id,
+                                photo=message.photo.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "video":
+                            sent_message = await self.client.send_video(
+                                chat_id=target_chat_id,
+                                video=message.video.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "document":
+                            sent_message = await self.client.send_document(
+                                chat_id=target_chat_id,
+                                document=message.document.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "animation":
+                            sent_message = await self.client.send_animation(
+                                chat_id=target_chat_id,
+                                animation=message.animation.file_id,
+                                caption=formatted_message
+                            )
+                        elif media_type == "sticker":
+                            # Stickers can't have captions, so send sticker followed by translation
+                            await self.client.send_sticker(
+                                chat_id=target_chat_id,
+                                sticker=message.sticker.file_id
+                            )
+                            sent_message = await self.client.send_message(
+                                chat_id=target_chat_id,
+                                text=formatted_message
+                            )
+                    else:
+                        # Just a text message
                         sent_message = await self.client.send_message(
                             chat_id=target_chat_id,
-                            text=formatted_message
+                            text=formatted_message,
+                            disable_web_page_preview=True,
                         )
-                else:
-                    # Just a text message
-                    sent_message = await self.client.send_message(
-                        chat_id=target_chat_id,
-                        text=formatted_message,
-                        disable_web_page_preview=True,
-                    )
+                        
+                    logger.info(f"Translation sent to {target_chat_id}")
+                    print(f"✅ Translation sent to {target_chat_id}")
                     
-                logger.info(f"Translation sent to {target_chat_id}")
-                print(f"✅ Translation sent to {target_chat_id}")
-                
-                # Store in message database for chat insights
-                try:
-                    # Get message store and config
-                    message_store = get_message_store()
-                    insights_config = get_insights_config()
+                    # Store in message database for chat insights
+                    try:
+                        # Get message store and config
+                        message_store = get_message_store()
+                        insights_config = get_insights_config()
+                        
+                        # Only store if we're configured to store messages
+                        if insights_config.get("store_full_content", True):
+                            # Handle anonymization if enabled
+                            display_sender = sender_name
+                            if insights_config.get("anonymize_senders", False):
+                                display_sender = "Anonymous"
+                                
+                            # Store the message
+                            message_store.store_message(
+                                message_id=sent_message.id if sent_message else 0,
+                                original_message_id=message.id,
+                                source_chat_id=chat_id,
+                                target_chat_id=target_chat_id,
+                                sender_id=sender_id,
+                                sender_name=display_sender,
+                                content=translated_text,
+                                original_content=text,
+                                source_language=None,  # We don't know the source language
+                                target_language=TARGET_LANGUAGE,
+                                is_media=media_type is not None,
+                                media_type=media_type,
+                                is_forwarded=message.forward_date is not None
+                            )
+                            print(f"📝 Stored message in database for chat insights")
+                    except Exception as store_error:
+                        logger.error(f"Error storing message in database: {store_error}")
+                        print(f"❌ Could not store message: {store_error}")
+                        # Continue processing even if storage fails
                     
-                    # Only store if we're configured to store messages
-                    if insights_config.get("store_full_content", True):
-                        # Handle anonymization if enabled
-                        display_sender = sender_name
-                        if insights_config.get("anonymize_senders", False):
-                            display_sender = "Anonymous"
-                            
-                        # Store the message
-                        message_store.store_message(
-                            message_id=sent_message.id if sent_message else 0,
-                            original_message_id=message.id,
-                            source_chat_id=chat_id,
-                            target_chat_id=target_chat_id,
-                            sender_id=sender_id,
-                            sender_name=display_sender,
-                            content=translated_text,
-                            original_content=text,
-                            source_language=None,  # We don't know the source language
-                            target_language=TARGET_LANGUAGE,
-                            is_media=media_type is not None,
-                            media_type=media_type,
-                            is_forwarded=message.forward_date is not None
-                        )
-                        print(f"📝 Stored message in database for chat insights")
-                except Exception as store_error:
-                    logger.error(f"Error storing message in database: {store_error}")
-                    print(f"❌ Could not store message: {store_error}")
-                    # Continue processing even if storage fails
+                    # Only update message ID if message was successfully translated and sent
+                    self.mapper.update_last_message_id(chat_id, message.id)
+                    print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
                 
+                except Exception as e:
+                    logger.error(f"Failed to send message to {target_chat_id}: {e}")
+                    print(f"❌ Failed to send message to {target_chat_id}: {e}")
+                    # DO NOT update the last message ID as sending failed
+                    return
+            
             except Exception as e:
-                logger.error(f"Failed to send message to {target_chat_id}: {e}")
-                print(f"❌ Failed to send message to {target_chat_id}: {e}")
-        
-            # Update message ID in state tracker after successful processing
-            self.mapper.update_last_message_id(chat_id, message.id)
-            print(f"✅ Updated last processed message ID to {message.id} for chat {chat_id}")
+                logger.error(f"Failed to translate message: {e}")
+                print(f"❌ Failed to translate message: {e}")
+                # DO NOT update the last message ID as translation failed
+                return
         
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             print(f"❌ Error handling message: {e}")
-            
-            # Even if there's an error, try to update the message ID to avoid reprocessing
-            try:
-                self.mapper.update_last_message_id(str(message.chat.id), message.id)
-                print(f"✅ Updated message ID to {message.id} despite error (to avoid reprocessing)")
-            except Exception as err:
-                print(f"❌ Failed to update message ID after error: {err}")
+            # DO NOT update the message ID when we have an error
+            # This will allow the message to be tried again
+            return
     
     async def _idle(self):
         """Keep the client running until stopped"""

@@ -1662,6 +1662,8 @@ def init_logging(verbose=False):
     
     # Configure logger
     logger.remove()
+    
+    # File logging with full information (unchanged)
     logger.add(
         "logs/silentgem.log",
         rotation="10 MB",
@@ -1669,7 +1671,31 @@ def init_logging(verbose=False):
         backtrace=True,
         diagnose=True,
     )
-    logger.add(lambda msg: print(msg), level=log_level)
+    
+    # Custom print handler with line break control
+    def custom_print_handler(message):
+        # Remove trailing newlines and print with controlled formatting
+        msg = message.rstrip()
+        # Only add line break before certain messages that represent transitions
+        if any(marker in msg for marker in [
+            "Starting in", 
+            "==== SilentGem", 
+            "Waiting for messages",
+            "Client stopped",
+            "Keyboard interrupt",
+            "Exiting SilentGem",
+            "Setup wizard"
+        ]):
+            print(f"\n{msg}")
+        else:
+            print(msg)
+    
+    # Console logging with level prefix but no other metadata
+    logger.add(
+        custom_print_handler, 
+        level=log_level,
+        format="[{level.name}] {message}"
+    )
     
     if verbose:
         logger.debug("Verbose logging enabled")
