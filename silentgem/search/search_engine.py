@@ -311,14 +311,36 @@ class SearchEngine:
 2. Expand the query with relevant alternative search phrases
 3. Identify important key terms in the query
 4. Split complex queries into their core concepts
+5. Recognize entity types like places, people, and topics
 
 For each query, generate 3-5 alternative search phrases that would help find relevant messages.
 Consider synonyms, related concepts, domain-specific language, and common abbreviations.
 Extract the most important terms that should definitely be included in results.
-Respond with a JSON object in this format:
+
+IMPORTANT: 
+- Focus on the SPECIFIC topic of the query, don't mix unrelated topics
+- When a query asks "What's happening in X?", focus only on X and related terms
+- Never include terms from completely unrelated topics
+- For example, if the query is about blockchain, don't include terms about conflicts or weather events
+- If the query is about Gaza conflicts, don't include terms about cryptocurrency or blockchain
+
+For queries about places, locations, cities:
+- Common spellings and variations of place names
+- Alternative names for the same locations
+- Regional terms, neighborhoods, and districts
+- Categories like "town", "city", "location", "area", "region"
+
+For queries about "places hit" or similar, include terms for:
+- affected areas, damaged locations, impact zones, target sites
+- cities, towns, villages affected
+- regions and territories mentioned
+
+Return your response as a JSON object with this structure:
 {
   "expanded_terms": ["term1", "term2", "term3"],
-  "key_concepts": ["concept1", "concept2"]
+  "key_concepts": ["concept1", "concept2"],
+  "entity_type": "place|person|topic|event|other",
+  "primary_topic": "main subject of the query"
 }
 """
 
@@ -327,8 +349,8 @@ Respond with a JSON object in this format:
             response = await self.llm_client.complete(
                 prompt=user_prompt,
                 system=system_prompt,
-                max_tokens=250,  # Increased from 150 to allow for more detailed responses
-                temperature=0.4,  # Reduced from 0.5 for more focused results
+                max_tokens=250,
+                temperature=0.4,
                 response_format={"type": "json_object"}
             )
             
@@ -349,39 +371,70 @@ Respond with a JSON object in this format:
                         try:
                             parsed_response = json.loads(json_str)
                         except json.JSONDecodeError:
-                            # Last resort: strip any extra text that might be after the JSON
-                            # Sometimes LLMs add explanations after the JSON
-                            logger.warning("Regex extraction failed, trying to clean up the JSON")
-                            lines = json_str.split('\n')
-                            # Find where the closing brace is and keep only up to that point
-                            for i, line in enumerate(lines):
-                                if '}' in line:
-                                    cleaned_json = '\n'.join(lines[:i+1])
-                                    # Make sure we include the closing brace
-                                    if not cleaned_json.strip().endswith('}'):
-                                        cleaned_json = cleaned_json + '}'
-                                    try:
-                                        parsed_response = json.loads(cleaned_json)
-                                        break
-                                    except:
-                                        pass
-                            else:
-                                # If we got here, we failed to parse the JSON
-                                logger.error(f"Failed to parse LLM response after cleanup attempts: {response}")
-                                return [query]
+                            # Better JSON cleanup strategy
+                            logger.warning("Regex extraction failed, trying advanced JSON cleanup")
+                            # Try to find and fix common JSON formatting issues
+                            cleaned_json = json_str
+                            # Fix unescaped quotes in strings
+                            cleaned_json = re.sub(r'(?<!")(".*?)(?<!\\)"(.*?)(?<!\\)"(?!")', r'\1\"\2\"', cleaned_json)
+                            # Fix trailing commas before closing brackets
+                            cleaned_json = re.sub(r',\s*}', '}', cleaned_json)
+                            # Fix missing quotes around property names
+                            cleaned_json = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'\1"\2":', cleaned_json)
+                            
+                            try:
+                                parsed_response = json.loads(cleaned_json)
+                            except json.JSONDecodeError:
+                                # Last resort: strip any extra text and reconstruct the JSON
+                                logger.warning("Advanced cleanup failed, trying line-by-line reconstruction")
+                                lines = json_str.split('\n')
+                                # Find valid JSON content
+                                json_content = {}
+                                
+                                # Extract arrays from the text
+                                expanded_terms = re.findall(r'"expanded_terms"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
+                                if expanded_terms:
+                                    terms = re.findall(r'"([^"]+)"', expanded_terms[0])
+                                    json_content["expanded_terms"] = terms or []
+                                
+                                key_concepts = re.findall(r'"key_concepts"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
+                                if key_concepts:
+                                    concepts = re.findall(r'"([^"]+)"', key_concepts[0])
+                                    json_content["key_concepts"] = concepts or []
+                                    
+                                entity_type = re.findall(r'"entity_type"\s*:\s*"([^"]+)"', json_str)
+                                if entity_type:
+                                    json_content["entity_type"] = entity_type[0]
+                                    
+                                if json_content:
+                                    parsed_response = json_content
+                                else:
+                                    logger.error(f"Failed to parse LLM response after all cleanup attempts")
+                                    return [query]
                     else:
                         # No JSON-like content found
-                        logger.error(f"No JSON found in LLM response: {response}")
-                        return [query]
+                        logger.warning(f"No JSON found in LLM response: {response}")
+                        # Try to intelligently extract some value anyway
+                        expanded_query = self._extract_fallback_terms(query, response)
+                        return expanded_query if expanded_query else [query]
                 
                 expanded_terms = parsed_response.get("expanded_terms", [])
                 key_concepts = parsed_response.get("key_concepts", [])
+                entity_type = parsed_response.get("entity_type", "other")
                 
                 # Combine and ensure the original query is included
                 all_terms = expanded_terms + key_concepts
                 if query not in all_terms:
                     all_terms.append(query)
                     
+                # For place/location queries, make sure we have place-specific terms
+                if entity_type == "place" or "place" in query.lower() or "city" in query.lower() or "location" in query.lower():
+                    place_terms = ["cities", "towns", "locations", "places", "areas", "regions", "territories"]
+                    # Only add terms that aren't already included
+                    for term in place_terms:
+                        if not any(term in t.lower() for t in all_terms):
+                            all_terms.append(term)
+                
                 # Remove duplicates (case-insensitive)
                 seen = set()
                 unique_terms = []
@@ -392,15 +445,49 @@ Respond with a JSON object in this format:
                         unique_terms.append(term)
                 
                 logger.debug(f"Expanded query '{query}' to {len(unique_terms)} terms: {unique_terms}")
+                logger.info(f"Expanded query: {' OR '.join(unique_terms)}")
                 return unique_terms
                 
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to parse LLM response as JSON: {e}. Response: {response}")
+            except Exception as e:
+                logger.error(f"Failed to process LLM response: {e}. Response: {response}")
                 return [query]
                 
         except Exception as e:
             logger.error(f"Error in query processing with LLM: {e}")
             return [query] if query else []
+    
+    def _extract_fallback_terms(self, query: str, response: str) -> List[str]:
+        """
+        Extract useful search terms from response when JSON parsing fails
+        
+        Args:
+            query: The original query string
+            response: The text response from the LLM
+            
+        Returns:
+            List of extracted search terms
+        """
+        # Start with the original query
+        terms = [query]
+        
+        # Extract anything that looks like it could be a search term
+        # Look for lists like "1. term1", "- term2", etc.
+        list_items = re.findall(r'(?:^|\n)\s*(?:[0-9]+\.|\-|\*)\s*([^\n]+)', response)
+        if list_items:
+            terms.extend(list_items)
+        
+        # Look for quoted strings which might contain search terms
+        quoted = re.findall(r'"([^"]+)"', response)
+        if quoted:
+            terms.extend(quoted)
+        
+        # For place-related queries, add some standard place terms
+        if "place" in query.lower() or "city" in query.lower() or "location" in query.lower():
+            place_terms = ["cities", "towns", "locations", "places", "areas", "regions", "territories"]
+            terms.extend(place_terms)
+        
+        # Remove duplicates and very short terms
+        return list(set([term for term in terms if term and len(term) > 2]))
     
     async def _collect_extended_context(
         self, 

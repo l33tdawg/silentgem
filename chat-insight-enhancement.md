@@ -24,6 +24,9 @@ The conversational enhancements planned for version 1.2 have been successfully i
 - ✅ Better handling of common query patterns like "What's the latest in X?" or "What's the status of Y?"
 - ✅ Topic tracking and trend identification
 - ✅ Support for cross-channel contextual analysis
+- ✅ Contextual follow-up question handling with smart detection of related queries
+- ✅ Topic transition detection to properly separate unrelated conversations
+- ✅ Basic conversation memory within the same session
 
 ### Completed Features
 - ✅ Message storage database schema implemented
@@ -209,9 +212,9 @@ To make Chat Insights a daily-use tool that provides exceptional value, the foll
 
 ### Priority 1: Core User Experience Improvements
 
-#### Conversation Memory and Continuity
-- **Persistent Conversation Context**: Remember previous questions for natural follow-ups
-- **Context Window Extension**: Expand the conversational context beyond single queries
+#### Advanced Conversation Memory and Continuity
+- **Cross-session Conversation Context**: Remember previous questions across different sessions for natural follow-ups
+- **Extended Context Window**: Further expand the conversational context across multiple interactions
 - **Query Templates**: Save common queries for quick reuse
 
 #### Interactive Exploration

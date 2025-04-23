@@ -135,6 +135,8 @@ Chat Insights automatically stores all translated messages in a local database a
 - **Conversational responses**: Get natural, ChatGPT-like answers that synthesize information across messages
 - **Topic tracking**: Better handling of questions like "What's the latest in Gaza?" or "What's the status of project X?"
 - **Enhanced question understanding**: Improved pattern recognition for common query types
+- **Contextual follow-up questions**: Smart detection of related questions for improved conversation flow (NEW)
+- **Topic transition detection**: Automatically identifies when conversation shifts to new topics (NEW)
 
 ### Setting Up Chat Insights
 
@@ -219,10 +221,10 @@ For more detailed documentation on Chat Insights, see `docs/chat_insights.md`
 
 SilentGem is continuously improving with a focus on making Chat Insights a powerful daily assistant for managing information across channels.
 
-### Version 1.3 - Conversational Memory (Coming Soon)
+### Version 1.3 - Advanced Conversational Memory (Coming Soon)
 
 Priority features planned for the next release:
-- **Persistent Conversation Context**: Remember previous interactions across different sessions for more natural follow-up questions over time.
+- **Cross-session Conversation Context**: Remember previous interactions across different sessions for even more natural follow-up questions.
 - **Interactive Exploration**: Add buttons to responses for expanding details or exploring related topics
 - **Guided Queries**: Get suggestions for follow-up questions related to your current topic
 - **Query Templates**: Save and reuse common search patterns

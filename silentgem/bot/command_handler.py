@@ -126,12 +126,20 @@ class CommandHandler:
             
             # Determine if this is a follow-up question
             is_followup = False
+            previous_query = ""
             try:
                 # Use the converted dict list for checking
                 if conversation_history_dicts and len(conversation_history_dicts) >= 2:
                     previous_messages = [msg for msg in conversation_history_dicts if msg.get('role') == 'user']
                     if len(previous_messages) >= 2:
-                        is_followup = self._is_related_query(query, previous_messages[-2].get('content', ''))
+                        previous_query = previous_messages[-2].get('content', '')
+                        is_followup = self._is_related_query(query, previous_query)
+                        
+                        # Log the follow-up detection
+                        if is_followup:
+                            logger.info(f"Detected follow-up question. Current: '{query}', Previous: '{previous_query}'")
+                        else:
+                            logger.debug(f"Not a follow-up. Current: '{query}', Previous: '{previous_query}'")
             except Exception as e:
                 logger.warning(f"Error determining if query is follow-up: {e}")
             
@@ -139,9 +147,25 @@ class CommandHandler:
             interpretation = None
             try:
                 # If this is a follow-up, include context from the previous query
-                # Call the processor. Note: The underlying search.query_processor 
-                # currently doesn't use context or other flags, but the llm bridge accepts them.
-                # We pass only the query for now to avoid TypeErrors with the underlying implementation.
+                # Special handling for place-related follow-up questions
+                if is_followup:
+                    # Check if this is a place-related query
+                    place_indicators = ["cities", "places", "towns", "locations", "areas", "regions"]
+                    is_place_query = any(indicator in query.lower() for indicator in place_indicators)
+                    
+                    if is_place_query:
+                        # For place queries, try to enhance the query with context
+                        enhanced_query = query
+                        
+                        # If previous query was about a specific location/event, add it to the query
+                        location_context = self._extract_location_context(previous_query)
+                        if location_context:
+                            # Format: "Make a list of cities in [location_context]"
+                            enhanced_query = f"{query} in {location_context}"
+                            logger.info(f"Enhanced place query with context: '{enhanced_query}'")
+                            query = enhanced_query
+                
+                # Call the processor with the potentially enhanced query
                 interpretation = await self.query_processor.process_query(query)
             except Exception as e:
                 logger.warning(f"Error processing query with NLU: {e}")
@@ -158,8 +182,21 @@ class CommandHandler:
                 if is_followup and not interpretation.time_period and conversation_context.get('time_period'):
                     interpretation.time_period = conversation_context.get('time_period')
                     logger.info(f"Reusing time period from previous query: {interpretation.time_period}")
+                    
+                # For place-related follow-ups, ensure we maintain context about discussed places
+                if is_followup and hasattr(interpretation, 'processed_query'):
+                    # If this query is about places but doesn't mention specific places from previous query
+                    place_indicators = ["cities", "places", "towns", "locations", "areas", "regions"]
+                    is_place_query = any(indicator in query.lower() for indicator in place_indicators)
+                    
+                    if is_place_query:
+                        previous_context = conversation_context.get('place_context', '')
+                        if previous_context and previous_context not in interpretation.processed_query:
+                            # Append the place context to the processed query
+                            interpretation.processed_query = f"{interpretation.processed_query} {previous_context}"
+                            logger.info(f"Added place context to processed query: {interpretation.processed_query}")
             except Exception as e:
-                logger.warning(f"Error reusing time period: {e}")
+                logger.warning(f"Error handling query context: {e}")
             
             # Include previous search results in follow-up if appropriate
             try:
@@ -285,13 +322,54 @@ class CommandHandler:
                         if msg.get('id'):
                             message_ids.append(msg.get('id'))
                     
-                    new_context = {
-                        'last_query': query,
-                        'processed_query': getattr(interpretation, "processed_query", None) or query,
-                        'time_period': getattr(interpretation, "time_period", None),
-                        'previous_message_ids': message_ids,
-                        'last_updated': int(time.time())
-                    }
+                    # Check if this is a completely new topic
+                    is_new_topic = not is_followup
+                    
+                    # Reset context for new topics
+                    if is_new_topic:
+                        # Create fresh context for new topic
+                        new_context = {
+                            'last_query': query,
+                            'processed_query': getattr(interpretation, "processed_query", None) or query,
+                            'time_period': getattr(interpretation, "time_period", None),
+                            'previous_message_ids': message_ids,
+                            'last_updated': int(time.time())
+                        }
+                        
+                        # Extract new place context if present in this new topic
+                        place_context = self._extract_location_context(query)
+                        if place_context:
+                            new_context['place_context'] = place_context
+                            logger.info(f"New topic: saved place context in conversation memory: {place_context}")
+                        else:
+                            # Explicitly remove any old place context to avoid contamination
+                            logger.info("New topic detected: clearing previous place context")
+                    else:
+                        # For follow-up questions, maintain relevant context
+                        place_context = ''
+                        
+                        # Check if this was a place-related query
+                        place_indicators = ["cities", "places", "towns", "locations", "areas", "regions"]
+                        if any(indicator in query.lower() for indicator in place_indicators):
+                            # If we're asking about places, preserve the context from previous query
+                            place_context = conversation_context.get('place_context', '')
+                        else:
+                            # If this is a general query that might mention places, try to extract location
+                            place_context = self._extract_location_context(query)
+                        
+                        new_context = {
+                            'last_query': query,
+                            'processed_query': getattr(interpretation, "processed_query", None) or query,
+                            'time_period': getattr(interpretation, "time_period", None),
+                            'previous_message_ids': message_ids,
+                            'last_updated': int(time.time())
+                        }
+                        
+                        # Add place context if available for follow-up questions
+                        if place_context:
+                            new_context['place_context'] = place_context
+                            logger.info(f"Follow-up question: maintained place context in conversation memory: {place_context}")
+                    
                     self.conversation_memory.update_context(chat_id, user_id, new_context)
             except Exception as e:
                 logger.warning(f"Error updating conversation context: {e}")
@@ -357,6 +435,10 @@ class CommandHandler:
         Returns:
             bool: True if this appears to be a follow-up question
         """
+        # If either query is empty, they can't be related
+        if not current_query or not previous_query:
+            return False
+        
         # Common follow-up phrases
         follow_up_phrases = [
             "what about",
@@ -369,20 +451,56 @@ class CommandHandler:
             "why",
             "how",
             "also",
-            "additionally"
+            "additionally",
+            "make a list",
+            "list",
+            "show me",
+            "which ones",
+            "which",
+            "name the"
         ]
         
         # Check for common follow-up phrases
         for phrase in follow_up_phrases:
             if current_query.lower().startswith(phrase):
                 return True
+            
+        # Common query indicators for places, entities, or topics referenced in previous queries
+        place_indicators = ["cities", "places", "towns", "locations", "areas", "regions"]
+        
+        # Check if the current query is asking about places referenced in previous conversations
+        if any(indicator in current_query.lower() for indicator in place_indicators):
+            # This is likely a follow-up about places mentioned earlier
+            # BUT only if we're still talking about the same general topic
+            
+            # Extract topic entities from both queries
+            previous_topic = self._extract_primary_topic(previous_query)
+            current_topic = self._extract_primary_topic(current_query)
+            
+            # If we can identify topics in both and they're different, consider it a new query
+            if previous_topic and current_topic and previous_topic.lower() != current_topic.lower():
+                # Different identified topics mean this is NOT a follow-up
+                logger.info(f"Detected topic change from '{previous_topic}' to '{current_topic}'")
+                return False
+            
+            # Topics overlap or couldn't be determined clearly, treat as follow-up
+            return True
+        
+        # Check for completely different topics that would indicate a new conversation
+        previous_topics = self._extract_topics(previous_query)
+        current_topics = self._extract_topics(current_query)
+        
+        # If the topics are completely different, it's likely a new query
+        if previous_topics and current_topics and not any(t.lower() in [ct.lower() for ct in current_topics] for t in previous_topics):
+            logger.info(f"Topics changed from {previous_topics} to {current_topics}")
+            return False
         
         # Check for keyword overlap
         def extract_keywords(text: str) -> List[str]:
             # Remove stop words and punctuation, keep meaningful keywords
             text = re.sub(r'[^\w\s]', ' ', text.lower())
             words = text.split()
-            stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'about'}
+            stop_words = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'about', 'and', 'or', 'what', 'where', 'when', 'how', 'which', 'who', 'why', 'make', 'list', 'tell', 'me', 'show'}
             return [w for w in words if len(w) > 2 and w not in stop_words]
         
         current_keywords = set(extract_keywords(current_query))
@@ -391,13 +509,115 @@ class CommandHandler:
         # If the current query is very short and there's keyword overlap, likely a follow-up
         if len(current_query.split()) <= 4 and len(current_keywords.intersection(previous_keywords)) > 0:
             return True
-            
+        
         # If there's significant keyword overlap, it's likely related
         overlap = len(current_keywords.intersection(previous_keywords))
-        if overlap >= 2 or (overlap > 0 and len(current_keywords) <= 3):
+        if overlap >= 1 or (overlap > 0 and len(current_keywords) <= 3):
             return True
-            
+        
         return False
+
+    def _extract_primary_topic(self, query: str) -> str:
+        """
+        Extract the primary topic (subject) from a query
+        
+        Args:
+            query: The query to extract the topic from
+            
+        Returns:
+            str: The primary topic or empty string
+        """
+        # Look for primary topics in the query (usually proper nouns)
+        # First check for location names which are often primary topics
+        location = self._extract_location_context(query)
+        if location:
+            return location
+        
+        # Look for capitalized terms that might be topics
+        topic_match = re.search(r'([A-Z][a-zA-Z]+(?:(?:\s|-)[A-Z][a-zA-Z]+)*)', query)
+        if topic_match:
+            return topic_match.group(1)
+        
+        # Try to extract known topic words
+        topic_words = ["blockchain", "crypto", "war", "conflict", "storm", "hurricane", 
+                      "election", "politics", "technology", "attack", "bombing"]
+        
+        for word in topic_words:
+            if word.lower() in query.lower():
+                return word
+        
+        return ""
+    
+    def _extract_topics(self, query: str) -> List[str]:
+        """
+        Extract multiple potential topics from a query
+        
+        Args:
+            query: The query to extract topics from
+            
+        Returns:
+            List of identified topics
+        """
+        topics = []
+        
+        # Add the primary topic if one is found
+        primary = self._extract_primary_topic(query)
+        if primary:
+            topics.append(primary)
+        
+        # Extract all capitalized terms as potential entities
+        cap_terms = re.findall(r'([A-Z][a-zA-Z]+(?:(?:\s|-)[A-Z][a-zA-Z]+)*)', query)
+        topics.extend([term for term in cap_terms if term not in topics])
+        
+        # Add known topic categories if they appear in the query
+        categories = {
+            "political": ["government", "election", "politics", "president", "minister"],
+            "conflict": ["war", "bombing", "attack", "fighting", "troops", "military"],
+            "tech": ["blockchain", "crypto", "cryptocurrency", "technology", "software", "digital"],
+            "weather": ["storm", "hurricane", "typhoon", "weather", "climate"],
+            "financial": ["market", "stock", "trading", "finance", "economy", "economic"]
+        }
+        
+        # Check each category
+        for category, terms in categories.items():
+            if any(term in query.lower() for term in terms):
+                topics.append(category)
+        
+        return topics
+
+    def _extract_location_context(self, query: str) -> str:
+        """
+        Extract location context from a query
+        
+        Args:
+            query: The query to extract location from
+            
+        Returns:
+            str: Extracted location or empty string
+        """
+        # Check for common location patterns in the query
+        # Common format: "What's happening in X?" or "Latest news from Y"
+        location_patterns = [
+            r'in ([A-Z][a-zA-Z]+)',  # "in Gaza", "in Ukraine" 
+            r'from ([A-Z][a-zA-Z]+)',  # "from Israel"
+            r'at ([A-Z][a-zA-Z]+)',  # "at Jerusalem"
+            r'about ([A-Z][a-zA-Z]+)',  # "about Palestine" 
+            r'on ([A-Z][a-zA-Z]+)',  # "on West Bank"
+            r'([A-Z][a-zA-Z]+) (?:bombing|attack|conflict|war|situation)'  # "Gaza bombing", "Ukraine conflict"
+        ]
+        
+        for pattern in location_patterns:
+            matches = re.search(pattern, query)
+            if matches:
+                return matches.group(1)
+        
+        # Check for specifically mentioned regions that might not match the patterns above
+        common_locations = ["Gaza", "Israel", "Palestine", "Ukraine", "Russia", "Syria", "Lebanon", "Iran", "Iraq"]
+        for location in common_locations:
+            if location in query:
+                return location
+            
+        return ""
 
 # Singleton pattern for accessing command handler
 _command_handler_instance = None
