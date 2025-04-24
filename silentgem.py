@@ -1281,12 +1281,13 @@ async def interactive_mode():
             elif choice == '4':
                 await interactive_remove_mapping()
             elif choice == '5':
+                # Use the imported setup_wizard directly
                 await setup_wizard()
             elif choice == '6':
-                from silentgem.setup import config_llm_settings
+                # Use the imported config_llm_settings directly
                 await config_llm_settings()
             elif choice == '7':
-                from silentgem.setup import config_target_language
+                # Use the imported config_target_language directly
                 await config_target_language()
             elif choice == '8':
                 # Chat Insights settings
