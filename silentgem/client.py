@@ -548,7 +548,7 @@ class SilentGemClient:
             
             # Translate the text
             logger.debug(f"Translating text: {text[:50]}...")
-            print(f"🧠 Sending to Gemini for translation...")
+            print(f"🧠 Sending to {LLM_ENGINE} for translation...")
             
             try:
                 translated_text = await self.translator.translate(text)
