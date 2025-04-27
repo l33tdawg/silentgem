@@ -93,6 +93,15 @@ class BaseTranslator(ABC):
             r'^"(.*)"$',
             r"^'(.*)'$",
             r"^`(.*)`$",
+
+            # Additional patterns to match prompt instructions
+            r"^(maintain the original formatting,? tone,? and meaning.*?)\n",
+            r"(IMPORTANT INSTRUCTIONS:.*?(?=TEXT TO TRANSLATE|TRANSLATION IN))",
+            r"^(- Return ONLY the translated text.*?\n)",
+            r"^(- DO NOT.*?\n)",
+            r"(You are a professional translator\..*?\n)",
+            r"^(TEXT TO TRANSLATE:.*?\n)",
+            r"^(TRANSLATION IN .*?:.*?\n)",
         ]
         
         # Apply all patterns
