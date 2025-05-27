@@ -13,7 +13,7 @@ class QueryInterpretationResult:
     """Results of query interpretation"""
     processed_query: Optional[str] = None
     time_period: Optional[str] = None
-    cross_chats: bool = False
+    cross_chats: bool = True  # Default to searching across all chats
     expanded_terms: List[str] = None
     search_strategies: List[str] = None
     sender: Optional[str] = None

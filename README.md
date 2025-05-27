@@ -133,43 +133,43 @@ Chat Insights automatically stores all translated messages in a local database a
 - **Larger context window**: Get more context around matched messages (15 messages before/after)
 - **Unified insights**: See connections between information from different sources
 - **Smart context organization**: Messages are grouped by chat for better understanding
-- **Conversational responses**: Get natural, ChatGPT-like answers that synthesize information across messages
+- **Conversational responses**: Get natural, focused answers that synthesize information across messages
 - **Topic tracking**: Better handling of questions like "What's the latest in Gaza?" or "What's the status of project X?"
 - **Enhanced question understanding**: Improved pattern recognition for common query types
 - **Contextual follow-up questions**: Smart detection of related questions for improved conversation flow
 - **Topic transition detection**: Automatically identifies when conversation shifts to new topics
 - **⚡ Ultra-Fast Performance**: Dramatically improved response times with sub-3 second responses (NEW in v1.2.1)
+- **🎯 Concise Responses**: Direct, focused answers that avoid repetition and unnecessary verbosity (NEW in v1.2.2)
 
-### Performance Improvements (v1.2.1)
+### Performance Improvements (v1.2.1 & v1.2.2)
 
-SilentGem Chat Insights has received major performance optimizations that deliver **lightning-fast responses**:
+SilentGem Chat Insights has received major performance and usability optimizations:
 
-#### 🚀 Speed Improvements
+#### 🚀 Speed Improvements (v1.2.1)
 - **5x faster response times**: Reduced from 9-10 seconds to 2-3 seconds for most queries
 - **Intelligent caching**: Query results are cached for 5 minutes, providing instant responses for repeated queries
-- **Fast mode by default**: Optimized search strategies that prioritize speed without sacrificing accuracy
+- **Optimized search strategies**: Direct keyword matching prioritized over complex semantic expansion
 - **Parallel processing**: Multiple operations run concurrently for better performance
 
+#### 🎯 Response Quality Improvements (v1.2.2)
+- **Concise by default**: Responses are now direct and focused, avoiding unnecessary verbosity
+- **Smart follow-up detection**: Automatically detects follow-up questions and avoids repeating information
+- **Reduced context overhead**: Streamlined prompts focus on essential information only
+- **Faster LLM processing**: Reduced token usage for quicker response generation
+
 #### 🔧 Technical Optimizations
-- **Simplified search strategies**: Direct keyword matching prioritized over complex semantic expansion
-- **Reduced LLM calls**: Minimal use of AI processing for faster responses
+- **Simplified conversation analysis**: Skips complex analysis for better performance
+- **Focused context collection**: Only includes recent conversation history when relevant
 - **Optimized database queries**: Streamlined SQL operations with better indexing
-- **Smart context collection**: Only collect extended context when specifically needed
-- **Efficient response formatting**: Fast basic formatting with optional LLM enhancement
+- **Efficient response formatting**: Prioritizes direct answers over comprehensive analysis
 
 #### 📊 Performance Metrics
 - **Database search**: Sub-100ms for most queries
 - **Cache hits**: Near-instantaneous responses (< 0.1s)
+- **Response generation**: 2-3 seconds for most queries
 - **Memory usage**: Optimized caching with automatic cleanup
-- **Concurrent queries**: Improved handling of multiple simultaneous requests
 
-#### ⚙️ Configurable Performance
-Users can choose between different performance modes:
-- **Fast Mode** (default): Prioritizes speed with 2-3 second responses
-- **Intelligent Mode**: Uses LLM for more sophisticated responses (3-5 seconds)
-- **Detailed Mode**: Full context analysis for complex queries (5-8 seconds)
-
-These improvements make SilentGem Chat Insights feel truly responsive and suitable for real-time conversation assistance.
+These improvements make SilentGem Chat Insights feel truly responsive and provide focused, actionable answers without unnecessary verbosity.
 
 ### Setting Up Chat Insights
 
@@ -260,9 +260,17 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 - **5x faster response times**: From 9-10 seconds down to 2-3 seconds
 - **Intelligent caching system**: Instant responses for repeated queries
 - **Optimized search algorithms**: Smart keyword matching with minimal LLM overhead
-- **Configurable performance modes**: Fast, Intelligent, and Detailed modes
 - **Enhanced database performance**: Sub-100ms search times
 - **Memory optimization**: Efficient caching with automatic cleanup
+
+### ✅ Version 1.2.2 - Response Quality Enhancement (COMPLETED)
+
+**Focused on improving response quality and reducing verbosity:**
+- **Concise responses by default**: Direct, focused answers without unnecessary elaboration
+- **Smart follow-up detection**: Avoids repeating information in follow-up questions
+- **Streamlined context processing**: Reduced prompt complexity for faster processing
+- **Optimized conversation intelligence**: Simplified analysis for better performance
+- **Reduced token usage**: Lower LLM costs and faster response generation
 
 ### Version 1.3 - Advanced Conversational Memory (Coming Soon)
 

@@ -231,7 +231,7 @@ class CommandHandler:
                     interpretation = QueryInterpretationResult(
                         processed_query=query,
                         time_period=self._extract_simple_time_period(query),
-                        cross_chats=False
+                        cross_chats=True  # Default to searching across all chats
                     )
                 else:
                     # Full processing with LLM
@@ -261,7 +261,7 @@ class CommandHandler:
                 interpretation = QueryInterpretationResult(
                     processed_query=query,
                     time_period=None,
-                    cross_chats=False
+                    cross_chats=True  # Default to searching across all chats
                 )
 
             # Prepare search parameters - simplified for speed

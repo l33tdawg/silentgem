@@ -158,18 +158,15 @@ Return your analysis as a JSON object with these fields:
             if not self.llm_client:
                 return self._fallback_response(query, search_results)
             
-            # Get conversation analysis
-            conversation_analysis = await self.analyze_conversation_context(chat_id, user_id)
+            # Get rich conversation context (skip complex analysis for speed)
+            rich_context = self.conversation_memory.get_rich_context_for_llm(chat_id, user_id, max_history=10)
             
-            # Get rich conversation context
-            rich_context = self.conversation_memory.get_rich_context_for_llm(chat_id, user_id, max_history=25)
+            # Build focused system prompt
+            system_prompt = self._build_intelligent_system_prompt({}, rich_context)
             
-            # Build comprehensive system prompt
-            system_prompt = self._build_intelligent_system_prompt(conversation_analysis, rich_context)
-            
-            # Build user prompt with all available context
+            # Build focused user prompt
             user_prompt = self._build_comprehensive_user_prompt(
-                query, search_results, rich_context, conversation_analysis, query_metadata
+                query, search_results, rich_context, {}, query_metadata
             )
             
             # Estimate token usage and trim if necessary
@@ -181,7 +178,7 @@ Return your analysis as a JSON object with these fields:
             response = await self.llm_client.chat_completion([
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ], temperature=0.4, max_tokens=2000)
+            ], temperature=0.3, max_tokens=800)
             
             if response and response.get("content"):
                 return response["content"]
@@ -197,58 +194,33 @@ Return your analysis as a JSON object with these fields:
         conversation_analysis: Dict[str, Any], 
         rich_context: Dict[str, Any]
     ) -> str:
-        """Build a sophisticated system prompt based on conversation analysis"""
+        """Build a focused system prompt for direct, concise responses"""
         
-        base_prompt = """You are SilentGem, an advanced AI assistant specializing in analyzing and synthesizing information from chat conversations and message histories. You have access to a comprehensive database of messages and conversations.
+        # Check if this is a follow-up question
+        depth = rich_context.get("conversation_metadata", {}).get("total_exchanges", 0)
+        is_followup = depth > 1
+        
+        base_prompt = """You are SilentGem, an AI assistant that provides direct answers based on chat messages.
 
-Your core capabilities:
-- Deep analysis of conversation patterns and themes
-- Intelligent synthesis of information across multiple sources
-- Context-aware responses that build on previous conversations
-- Insightful connections between different pieces of information
-- Adaptive communication style based on user preferences
+**Response Style**: 
+- Answer the question directly without preamble
+- Keep responses to 1-3 sentences for simple queries
+- Don't use phrases like "I found", "Based on", "According to"
+- State information as facts, not as search results
 
 """
         
-        # Add conversation-specific context
-        if conversation_analysis.get("conversation_themes"):
-            themes = ", ".join(conversation_analysis["conversation_themes"])
-            base_prompt += f"**Current Conversation Themes**: {themes}\n\n"
-        
-        if conversation_analysis.get("user_intent_patterns"):
-            patterns = ", ".join(conversation_analysis["user_intent_patterns"])
-            base_prompt += f"**User Intent Patterns**: {patterns}\n\n"
-        
-        # Add communication style guidance
-        info_prefs = conversation_analysis.get("information_preferences", {})
-        detail_level = info_prefs.get("detail_level", "standard")
-        
-        if detail_level == "concise":
-            base_prompt += "**Communication Style**: The user prefers concise, direct responses. Be brief but comprehensive.\n\n"
-        elif detail_level == "detailed":
-            base_prompt += "**Communication Style**: The user appreciates detailed, thorough analysis. Provide comprehensive insights and connections.\n\n"
-        else:
-            base_prompt += "**Communication Style**: Provide balanced responses with key insights and supporting details.\n\n"
-        
-        # Add conversation depth context
-        depth = rich_context.get("conversation_metadata", {}).get("total_exchanges", 0)
-        if depth > 10:
-            base_prompt += "**Conversation Context**: This is an ongoing, in-depth conversation. Build on previous discussions and provide sophisticated analysis.\n\n"
-        elif depth > 3:
-            base_prompt += "**Conversation Context**: This is a developing conversation. Reference previous topics and build connections.\n\n"
-        else:
-            base_prompt += "**Conversation Context**: This is a new or early conversation. Provide clear, foundational insights.\n\n"
-        
-        base_prompt += """**Response Guidelines**:
-1. **Synthesize, don't just summarize**: Create insights by connecting information across sources
-2. **Be conversational and natural**: Respond as a knowledgeable colleague, not a search engine
-3. **Build on conversation history**: Reference and build upon previous discussions
-4. **Provide actionable insights**: Go beyond just presenting information
-5. **Identify patterns and trends**: Look for connections across time and sources
-6. **Anticipate follow-up questions**: Address likely next questions
-7. **Use rich context**: Leverage the full conversation history for deeper understanding
+        if is_followup:
+            base_prompt += """**Follow-up Context**: This is a follow-up question. Answer the NEW question being asked, not the previous one. Don't repeat information from the previous response.
 
-**Never say**: "I found X messages" or "Here are the search results" - instead synthesize the information naturally.
+"""
+        
+        base_prompt += """**Guidelines**:
+1. Start with the direct answer
+2. State facts naturally without referencing sources
+3. Be conversational but brief
+4. For follow-ups, focus only on what's new
+
 """
         
         return base_prompt
@@ -261,57 +233,36 @@ Your core capabilities:
         conversation_analysis: Dict[str, Any],
         query_metadata: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Build a comprehensive user prompt with all available context"""
+        """Build a focused user prompt with essential context"""
         
         prompt_parts = []
         
         # Current query
-        prompt_parts.append(f"## Current Query\n{query}\n")
+        prompt_parts.append(f"## Query: {query}\n")
         
-        # Query context if available
-        if query_metadata:
-            if query_metadata.get("time_period"):
-                prompt_parts.append(f"**Time Period**: {query_metadata['time_period']}")
-            if query_metadata.get("expanded_terms"):
-                prompt_parts.append(f"**Related Terms Searched**: {', '.join(query_metadata['expanded_terms'])}")
-            prompt_parts.append("")
+        # Include recent conversation context for follow-ups
+        depth = rich_context.get("conversation_metadata", {}).get("total_exchanges", 0)
+        if depth > 1 and rich_context.get("conversation_history"):
+            recent_messages = rich_context["conversation_history"][-2:]  # Last 2 messages only
+            if recent_messages:
+                prompt_parts.append("## Previous Exchange:")
+                for msg in recent_messages:
+                    role = msg.get("role", "").upper()
+                    content = msg.get("content", "")
+                    if len(content) > 80:
+                        content = content[:80] + "..."
+                    prompt_parts.append(f"{role}: {content}")
+                prompt_parts.append("## Current Question:")
+                prompt_parts.append(f"User is now asking: {query}")
+                prompt_parts.append("")
         
-        # Conversation history (recent exchanges)
-        if rich_context.get("conversation_history"):
-            prompt_parts.append("## Recent Conversation History")
-            recent_messages = rich_context["conversation_history"][-10:]  # Last 10 messages
-            
-            for msg in recent_messages:
-                role = msg.get("role", "").upper()
-                content = msg.get("content", "")
-                timestamp = msg.get("timestamp", "")
-                query_type = msg.get("query_type", "")
-                
-                if query_type:
-                    prompt_parts.append(f"**{role}** [{timestamp}] ({query_type}): {content}")
-                else:
-                    prompt_parts.append(f"**{role}** [{timestamp}]: {content}")
-                
-                if msg.get("results_found"):
-                    prompt_parts.append(f"  → {msg['results_found']} results found")
-            
-            prompt_parts.append("")
-        
-        # Conversation insights
-        if conversation_analysis.get("topic_evolution"):
-            prompt_parts.append(f"## Topic Evolution\n{conversation_analysis['topic_evolution']}\n")
-        
-        if conversation_analysis.get("knowledge_gaps"):
-            gaps = ", ".join(conversation_analysis["knowledge_gaps"])
-            prompt_parts.append(f"## Potential Knowledge Gaps\n{gaps}\n")
-        
-        # Search results organized by relevance and time
+        # Search results - simplified format
         if search_results:
-            prompt_parts.append(f"## Relevant Information ({len(search_results)} sources)")
+            prompt_parts.append(f"## Relevant Messages:")
             
-            # Group by chat/source for better organization
+            # Group by chat but limit to top results
             chat_groups = {}
-            for result in search_results:
+            for result in search_results[:10]:  # Limit total results
                 chat_id = result.get("source_chat_id") or result.get("target_chat_id") or "unknown"
                 if chat_id not in chat_groups:
                     chat_groups[chat_id] = []
@@ -319,12 +270,12 @@ Your core capabilities:
             
             for chat_id, messages in chat_groups.items():
                 chat_title = messages[0].get("chat_title", f"Chat {chat_id}")
-                prompt_parts.append(f"\n### From {chat_title}")
+                prompt_parts.append(f"\n**{chat_title}:**")
                 
-                # Sort by timestamp
+                # Sort by timestamp and limit
                 messages.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
                 
-                for msg in messages[:15]:  # Limit per chat to manage context
+                for msg in messages[:5]:  # Max 5 per chat
                     content = msg.get("content", "") or msg.get("text", "")
                     sender = msg.get("sender_name", "") or msg.get("sender", "Unknown")
                     timestamp = msg.get("timestamp")
@@ -332,45 +283,21 @@ Your core capabilities:
                     if timestamp:
                         try:
                             dt = datetime.fromtimestamp(timestamp)
-                            time_str = dt.strftime("%Y-%m-%d %H:%M")
+                            time_str = dt.strftime("%m/%d %H:%M")
                         except:
-                            time_str = str(timestamp)
+                            time_str = "recent"
                     else:
-                        time_str = "Unknown time"
+                        time_str = "recent"
                     
-                    # Truncate very long messages
-                    if len(content) > 500:
-                        content = content[:500] + "..."
+                    # Truncate long messages
+                    if len(content) > 300:
+                        content = content[:300] + "..."
                     
-                    prompt_parts.append(f"- **{sender}** [{time_str}]: {content}")
+                    prompt_parts.append(f"- {sender} ({time_str}): {content}")
             
             prompt_parts.append("")
         else:
-            prompt_parts.append("## No Direct Matches Found\nNo specific messages matched the search criteria.\n")
-        
-        # Conversation summary for context
-        summary = rich_context.get("conversation_summary", {})
-        if summary.get("main_topics") or summary.get("key_entities"):
-            prompt_parts.append("## Conversation Context Summary")
-            if summary.get("main_topics"):
-                prompt_parts.append(f"**Main Topics Discussed**: {', '.join(summary['main_topics'])}")
-            if summary.get("key_entities"):
-                prompt_parts.append(f"**Key Entities**: {', '.join(summary['key_entities'])}")
-            prompt_parts.append("")
-        
-        # Expected next questions for proactive insights
-        if conversation_analysis.get("next_likely_questions"):
-            questions = conversation_analysis["next_likely_questions"][:3]  # Top 3
-            prompt_parts.append(f"## Likely Follow-up Questions\n{', '.join(questions)}\n")
-        
-        prompt_parts.append("## Instructions")
-        prompt_parts.append("Provide a comprehensive, insightful response that:")
-        prompt_parts.append("1. Directly addresses the current query")
-        prompt_parts.append("2. Synthesizes information from all relevant sources")
-        prompt_parts.append("3. Builds on the conversation history and context")
-        prompt_parts.append("4. Provides actionable insights and analysis")
-        prompt_parts.append("5. Anticipates and addresses likely follow-up questions")
-        prompt_parts.append("6. Maintains a natural, conversational tone")
+            prompt_parts.append("## No matching messages found.\n")
         
         return "\n".join(prompt_parts)
     
