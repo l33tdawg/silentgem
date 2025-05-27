@@ -1,101 +1,64 @@
 """
-Response formatter for formatting search results for display in Telegram
+Response formatting utilities for search results
 """
 
-from datetime import datetime
-import time
-from typing import List, Dict, Any, Optional, Callable
-from loguru import logger
-from collections import defaultdict
 import re
+import asyncio
+from typing import List, Dict, Any, Optional, Callable
+from datetime import datetime
+from loguru import logger
 
-from silentgem.translator import create_translator, BaseTranslator
-from silentgem.config.insights_config import get_insights_config
 from silentgem.llm.llm_client import get_llm_client
+
+# Performance settings
+FAST_MODE = True  # Use simple formatting by default
+MAX_LLM_MESSAGES = 10  # Limit messages sent to LLM
+MAX_CONTENT_LENGTH = 300  # Limit content length for speed
 
 async def format_search_results(
     messages: List[Dict[str, Any]],
     query: str,
     parsed_query: Optional[Dict[str, Any]] = None,
+    translator: Optional[Callable] = None,
     verbosity: str = "standard",
     include_quotes: bool = True,
     include_timestamps: bool = True,
     include_sender_info: bool = True,
     include_channel_info: bool = True,
+    context_messages: Optional[List[Dict[str, Any]]] = None,
     chat_messages_map: Optional[Dict[str, List[Dict[str, Any]]]] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+    use_llm: bool = False  # New parameter to control LLM usage
 ) -> str:
     """
-    Format search results for display in Telegram
+    Format search results into a readable response (optimized for speed)
     
     Args:
-        messages: List of message dictionaries from the database
-        query: Original query string
-        parsed_query: Parsed query dictionary from NLU
-        verbosity: Response verbosity level (concise, standard, detailed)
-        include_quotes: Whether to include original message quotes
+        messages: List of message dictionaries from search results
+        query: Original search query
+        parsed_query: Optional parsed query information
+        translator: Optional translator function (deprecated)
+        verbosity: Response verbosity level
+        include_quotes: Whether to include message quotes
         include_timestamps: Whether to include timestamps
         include_sender_info: Whether to include sender information
-        include_channel_info: Whether to include channel information and links
-        chat_messages_map: Dictionary mapping chat IDs to lists of messages, for better organization
-        conversation_history: History of the conversation for follow-up context
+        include_channel_info: Whether to include channel information
+        context_messages: Optional context messages
+        chat_messages_map: Optional mapping of chat IDs to messages
+        conversation_history: Optional conversation history
+        use_llm: Whether to use LLM for formatting (slower but more intelligent)
         
     Returns:
-        str: Formatted response
+        Formatted response string
     """
-    try:
-        if not messages:
-            # Enhanced empty results message
-            empty_message = f"📭 No messages found matching your query: '{query}'"
-            
-            # Include enhanced query terms if available
-            if parsed_query:
-                # Add original query if different
-                if parsed_query.get("original_query_text") and parsed_query.get("original_query_text") != query:
-                    empty_message += f"\n\nOriginal query: '{parsed_query.get('original_query_text')}'"
-                
-                # Add search terms used
-                if parsed_query.get("query_text") and " OR " in parsed_query.get("query_text"):
-                    empty_message += f"\n\nI searched for: {parsed_query.get('query_text')}"
-                
-                # Add search alternatives if available
-                if parsed_query.get("search_alternatives") and isinstance(parsed_query.get("search_alternatives"), list):
-                    alternatives = parsed_query.get("search_alternatives")
-                    if alternatives:
-                        empty_message += "\n\nYou might want to try these alternative search terms:"
-                        for i, alt in enumerate(alternatives[:3]):
-                            empty_message += f"\n- {alt}"
-                
-                # Add time period info
-                if parsed_query.get("time_period"):
-                    time_period = parsed_query.get("time_period")
-                    period_text = {
-                        "today": "today",
-                        "yesterday": "yesterday",
-                        "week": "the past week",
-                        "month": "the past month"
-                    }.get(time_period, time_period)
-                    empty_message += f"\n\nI searched in messages from {period_text}."
-                
-                empty_message += "\n\nTry broadening your search terms, or use different keywords related to your topic."
-            
-            return empty_message
-        
-        # Get insights configuration
-        config = get_insights_config()
-        
-        # Determine if we should use LLM formatting
-        query_depth = config.get("query_processing_depth", "standard")
-        use_llm_format = query_depth in ["standard", "detailed"] and len(messages) > 0
-        
-        # If using standard depth or higher and LLM is available, use it for better formatting
-        if use_llm_format and verbosity in ["standard", "detailed"]:
-            # Get translator for formatting
-            translator = await create_translator()
-            
-            # Format results using LLM
+    if not messages:
+        return f"No messages found matching '{query}'"
+    
+    # Use fast formatting by default, LLM only when explicitly requested
+    if use_llm and not FAST_MODE:
+        try:
             return await _format_with_llm(
-                messages=messages,
+                messages=messages[:MAX_LLM_MESSAGES],  # Limit for speed
                 query=query,
                 parsed_query=parsed_query,
                 translator=translator,
@@ -104,26 +67,25 @@ async def format_search_results(
                 include_timestamps=include_timestamps,
                 include_sender_info=include_sender_info,
                 include_channel_info=include_channel_info,
+                context_messages=context_messages,
                 chat_messages_map=chat_messages_map,
                 conversation_history=conversation_history
             )
-        
-        # Otherwise, use basic formatting
-        return await _format_basic(
-            messages=messages,
-            query=query,
-            parsed_query=parsed_query,
-            verbosity=verbosity,
-            include_quotes=include_quotes,
-            include_timestamps=include_timestamps,
-            include_sender_info=include_sender_info,
-            include_channel_info=include_channel_info
-        )
+        except Exception as e:
+            logger.warning(f"LLM formatting failed, falling back to basic: {e}")
+            # Fall through to basic formatting
     
-    except Exception as e:
-        logger.error(f"Error formatting search results: {e}")
-        # Return a simple fallback format
-        return _format_simple_fallback(messages, query)
+    # Use fast basic formatting
+    return _format_basic(
+        messages=messages,
+        query=query,
+        parsed_query=parsed_query,
+        verbosity=verbosity,
+        include_quotes=include_quotes,
+        include_timestamps=include_timestamps,
+        include_sender_info=include_sender_info,
+        include_channel_info=include_channel_info
+    )
 
 def _format_basic(
     messages: List[Dict[str, Any]],
@@ -136,7 +98,7 @@ def _format_basic(
     include_channel_info: bool = False
 ) -> str:
     """
-    Basic formatter without using LLM
+    Fast basic formatter without using LLM
     """
     # Format header based on query
     if parsed_query and "intent" in parsed_query:
@@ -166,78 +128,106 @@ def _format_basic(
     
     # Determine max message content length based on verbosity
     if verbosity == "concise":
-        max_content_length = 50
-        max_messages = min(5, len(messages))
+        max_content_length = 80
+        max_messages = min(3, len(messages))
     elif verbosity == "standard":
-        max_content_length = 100
-        max_messages = min(10, len(messages))
+        max_content_length = 150
+        max_messages = min(8, len(messages))
     else:  # detailed
-        max_content_length = 200
-        max_messages = len(messages)
+        max_content_length = MAX_CONTENT_LENGTH
+        max_messages = min(12, len(messages))
     
-    # Format each message
-    for i, msg in enumerate(messages[:max_messages]):
-        # Skip if we've reached the maximum
-        if i >= max_messages:
-            break
+    # Group messages by chat for better organization
+    if include_channel_info and len(set(msg.get('source_chat_id', 'unknown') for msg in messages)) > 1:
+        # Multiple chats - group by chat
+        chat_groups = {}
+        for msg in messages[:max_messages]:
+            chat_id = msg.get('source_chat_id') or msg.get('target_chat_id') or 'unknown'
+            if chat_id not in chat_groups:
+                chat_groups[chat_id] = []
+            chat_groups[chat_id].append(msg)
+        
+        for chat_id, chat_messages in chat_groups.items():
+            if len(chat_groups) > 1:
+                response.append(f"**From Chat {chat_id}:**")
             
-        message_lines = []
-        
-        # Add channel info if requested
-        if include_channel_info and msg.get("target_chat_id"):
-            chat_title = f"Channel ID: {msg['target_chat_id']}"
-            message_lines.append(f"📢 {chat_title}")
-        
-        # Add sender info
-        if include_sender_info and msg.get("sender_name"):
-            message_lines.append(f"👤 {msg['sender_name']}")
-        
-        # Add timestamp
-        if include_timestamps and msg.get("timestamp"):
-            # Format timestamp
-            dt = datetime.fromtimestamp(msg["timestamp"])
-            time_str = dt.strftime("%Y-%m-%d %H:%M")
-            message_lines.append(f"🕒 {time_str}")
-        
-        # Add content
-        if msg.get("content"):
-            # Truncate content if necessary
-            content = msg["content"]
-            if len(content) > max_content_length:
-                content = content[:max_content_length] + "..."
+            for i, msg in enumerate(chat_messages[:5]):  # Limit per chat
+                formatted_msg = _format_single_message(
+                    msg, i + 1, max_content_length, include_quotes, 
+                    include_timestamps, include_sender_info
+                )
+                response.append(formatted_msg)
             
-            # Format differently based on media type
-            if msg.get("is_media"):
-                media_type = msg.get("media_type", "media")
-                message_lines.append(f"📎 {media_type.capitalize()} with caption: {content}")
-            else:
-                if include_quotes:
-                    # Format as a quote
-                    quoted_lines = [f"> {line}" for line in content.split("\n")]
-                    message_lines.append("\n".join(quoted_lines))
-                else:
-                    message_lines.append(content)
-        else:
-            message_lines.append("[No text content]")
-        
-        # Add message link if possible
-        if include_channel_info and msg.get("target_chat_id") and msg.get("message_id"):
-            # Create a tg:// link that will work in Telegram
-            link = f"tg://privatepost?channel={msg['target_chat_id'].replace('-100', '')}&post={msg['message_id']}"
-            message_lines.append(f"🔗 [View Message]({link})")
-        
-        # Add to response
-        response.append("\n".join(message_lines))
-        
-        # Add separator if not the last message
-        if i < min(max_messages, len(messages)) - 1:
-            response.append("\n" + "-" * 20 + "\n")
+            if len(chat_messages) > 5:
+                response.append(f"... and {len(chat_messages) - 5} more from this chat")
+            response.append("")
+    else:
+        # Single chat or no chat grouping - simple list
+        for i, msg in enumerate(messages[:max_messages]):
+            formatted_msg = _format_single_message(
+                msg, i + 1, max_content_length, include_quotes, 
+                include_timestamps, include_sender_info
+            )
+            response.append(formatted_msg)
     
-    # Add note if we truncated results
+    # Add footer if there are more messages
     if len(messages) > max_messages:
-        response.append(f"\n... and {len(messages) - max_messages} more messages not shown.")
+        response.append(f"... and {len(messages) - max_messages} more messages not shown.")
+    
+    # Add simple footer
+    response.append("\n*Powered by SilentGem Insights*")
     
     return "\n".join(response)
+
+def _format_single_message(
+    msg: Dict[str, Any],
+    index: int,
+    max_content_length: int,
+    include_quotes: bool,
+    include_timestamps: bool,
+    include_sender_info: bool
+) -> str:
+    """Format a single message for display"""
+    parts = []
+    
+    # Message number
+    parts.append(f"{index}.")
+    
+    # Sender info
+    if include_sender_info:
+        sender = msg.get('sender_name') or msg.get('sender') or 'Unknown'
+        parts.append(f"**{sender}**")
+    
+    # Timestamp
+    if include_timestamps:
+        timestamp = msg.get('timestamp')
+        if timestamp:
+            try:
+                if isinstance(timestamp, (int, float)):
+                    dt = datetime.fromtimestamp(timestamp)
+                else:
+                    dt = datetime.fromisoformat(str(timestamp))
+                time_str = dt.strftime("%m/%d %H:%M")
+                parts.append(f"({time_str})")
+            except:
+                parts.append("(Unknown time)")
+    
+    # Content
+    content = msg.get('content') or msg.get('text') or '[No content]'
+    
+    # Truncate long content
+    if len(content) > max_content_length:
+        content = content[:max_content_length] + "..."
+    
+    # Clean up content
+    content = content.replace('\n', ' ').strip()
+    
+    if include_quotes:
+        parts.append(f": \"{content}\"")
+    else:
+        parts.append(f": {content}")
+    
+    return " ".join(parts)
 
 async def _format_with_llm(
     messages: List[Dict[str, Any]],

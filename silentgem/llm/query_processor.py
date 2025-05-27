@@ -53,21 +53,38 @@ class QueryProcessor:
         Returns:
             QueryInterpretationResult with processed query and metadata
         """
-        # Get results from the search query processor
-        search_result = await self._search_query_processor.process_query(query_text=query)
-        
-        # Convert to QueryInterpretationResult format
-        result = QueryInterpretationResult(
-            processed_query=search_result.get("query_text"),
-            time_period=search_result.get("time_period"),
-            cross_chats=True,  # Default to searching across all chats
-            expanded_terms=search_result.get("expanded_terms"),
-            search_strategies=search_result.get("search_strategies", ["direct", "semantic"]),
-            sender=search_result.get("sender"),
-            intent=search_result.get("intent", "search")
-        )
-        
-        return result
+        try:
+            # Get results from the search query processor
+            search_result = await self._search_query_processor.process_query(query_text=query)
+            
+            # Ensure search_result is a dict
+            if not search_result or not isinstance(search_result, dict):
+                search_result = {"query_text": query}
+            
+            # Convert to QueryInterpretationResult format
+            result = QueryInterpretationResult(
+                processed_query=search_result.get("query_text", query),
+                time_period=search_result.get("time_period"),
+                cross_chats=True,  # Default to searching across all chats
+                expanded_terms=search_result.get("expanded_terms", []),
+                search_strategies=search_result.get("search_strategies", ["direct", "semantic"]),
+                sender=search_result.get("sender"),
+                intent=search_result.get("intent", "search")
+            )
+            
+            return result
+            
+        except Exception as e:
+            # If anything goes wrong, return a basic result
+            return QueryInterpretationResult(
+                processed_query=query,
+                time_period=None,
+                cross_chats=True,
+                expanded_terms=[],
+                search_strategies=["direct", "semantic"],
+                sender=None,
+                intent="search"
+            )
 
 
 def get_query_processor():

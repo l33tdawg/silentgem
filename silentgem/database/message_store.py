@@ -9,6 +9,7 @@ from pathlib import Path
 from loguru import logger
 import time
 from datetime import datetime
+from typing import List
 
 # Ensure we use the same data directory as the main app
 from silentgem.config import DATA_DIR, ensure_dir_exists
@@ -179,6 +180,46 @@ class MessageStore:
             logger.error(f"Error storing message: {e}")
             return None
     
+    def _extract_key_terms(self, query: str) -> List[str]:
+        """
+        Extract key terms from a complex query
+        
+        Args:
+            query: The search query
+            
+        Returns:
+            List of key terms to search for
+        """
+        import re
+        
+        # Remove common question words and phrases
+        stop_words = {
+            'what', 'whats', 'what\'s', 'who', 'when', 'where', 'why', 'how', 
+            'is', 'are', 'was', 'were', 'the', 'a', 'an', 'and', 'or', 'but',
+            'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'about',
+            'latest', 'recent', 'new', 'any', 'some', 'all', 'most', 'many',
+            'developments', 'updates', 'news', 'information', 'details'
+        }
+        
+        # Clean and split the query
+        query = query.lower().strip()
+        # Remove punctuation except hyphens and apostrophes
+        query = re.sub(r'[^\w\s\'-]', ' ', query)
+        words = query.split()
+        
+        # Filter out stop words and short words
+        key_terms = []
+        for word in words:
+            word = word.strip()
+            if len(word) > 2 and word not in stop_words:
+                key_terms.append(word)
+        
+        # If no key terms found, return the original query
+        if not key_terms:
+            key_terms = [query]
+            
+        return key_terms
+
     def search_messages(self, query=None, chat_id=None, chat_ids=None, sender=None, time_period=None, time_range=None, limit=20, fuzzy=False):
         """
         Search messages in the database
@@ -224,67 +265,35 @@ class MessageStore:
                     for term in terms:
                         term = term.strip()
                         if term:
-                            # For each term, create more flexible conditions:
-                            # 1. Exact match on word boundaries
-                            # 2. Partial match anywhere in content
-                            # 3. Match entity text
-                            # 4. Match in original content
-                            term_condition = '''(
-                                content LIKE ? OR 
-                                content LIKE ? OR 
-                                LOWER(content) LIKE ? OR 
-                                LOWER(original_content) LIKE ? OR 
-                                id IN (SELECT message_id FROM message_entities WHERE LOWER(entity_text) LIKE ?)
-                            )'''
-                            or_conditions.append(term_condition)
-                            # Word boundary match
-                            params.append(f"% {term} %")  
-                            # Start of content
-                            params.append(f"{term}%")     
-                            # Anywhere in content (lowercase)
-                            params.append(f"%{term.lower()}%")  
-                            # Anywhere in original content
-                            params.append(f"%{term.lower()}%")  
-                            # Entity match
-                            params.append(f"%{term.lower()}%")  
+                            # Simplified search for OR terms
+                            or_conditions.append("LOWER(content) LIKE ?")
+                            params.append(f"%{term.lower()}%")
                     
                     if or_conditions:
                         sql += f" AND ({' OR '.join(or_conditions)})"
                 else:
-                    # Simple query without OR operators - use more flexible matching
-                    sql += ''' AND (
-                        content LIKE ? OR 
-                        content LIKE ? OR 
-                        LOWER(content) LIKE ? OR 
-                        LOWER(original_content) LIKE ? OR 
-                        id IN (SELECT message_id FROM message_entities WHERE LOWER(entity_text) LIKE ?)
-                    )'''
-                    # Word boundary match
-                    params.append(f"% {query} %")
-                    # Start of content  
-                    params.append(f"{query}%")
-                    # Anywhere in content (lowercase)
-                    params.append(f"%{query.lower()}%")
-                    # Anywhere in original content
-                    params.append(f"%{query.lower()}%")
-                    # Entity match
-                    params.append(f"%{query.lower()}%")
-                
-                # Special case for single-word queries - also search for words containing the query
-                # This helps with partial word matches like "gaz" matching "gaza"
-                if len(query.split()) == 1 and len(query) > 2:
-                    sql += " OR LOWER(content) LIKE ?"
-                    params.append(f"% {query.lower()}% ")
+                    # For complex natural language queries, extract key terms
+                    key_terms = self._extract_key_terms(query)
                     
-                    # Also try to match the beginning of words
-                    sql += " OR LOWER(content) LIKE ?"
-                    params.append(f"% {query.lower()}%")
+                    if len(key_terms) > 1:
+                        # Multiple key terms - search for any of them (simplified)
+                        term_conditions = []
+                        for term in key_terms:
+                            term_conditions.append("LOWER(content) LIKE ?")
+                            params.append(f"%{term.lower()}%")
+                        
+                        sql += f" AND ({' OR '.join(term_conditions)})"
+                    else:
+                        # Single term or simple query - simplified search
+                        search_term = key_terms[0] if key_terms else query
+                        sql += " AND LOWER(content) LIKE ?"
+                        params.append(f"%{search_term.lower()}%")
             
             # Add chat filter
             if chat_ids and isinstance(chat_ids, list) and chat_ids:
                 # Handle list of chat IDs
-                placeholders = ', '.join(['?'] * len(chat_ids) * 2)
-                sql += f" AND (source_chat_id IN ({placeholders[:len(chat_ids)]}) OR target_chat_id IN ({placeholders[len(chat_ids)+1:]}))"
+                placeholders = ', '.join(['?'] * len(chat_ids))
+                sql += f" AND (source_chat_id IN ({placeholders}) OR target_chat_id IN ({placeholders}))"
                 params.extend(chat_ids + chat_ids)  # Add chat_ids twice for both source and target
             elif chat_id:
                 # Handle single chat ID
@@ -335,8 +344,8 @@ class MessageStore:
             # Add fuzzy matching if requested
             if fuzzy and query:
                 # Add additional fuzzy conditions
-                sql += " OR LOWER(content) LIKE ? OR LOWER(original_content) LIKE ?"
-                params.extend([f"%{query.lower().replace(' ', '%')}%", f"%{query.lower().replace(' ', '%')}%"])
+                sql += " OR LOWER(content) LIKE ?"
+                params.append(f"%{query.lower().replace(' ', '%')}%")
             
             # Log the constructed query for debugging
             logger.debug(f"Search query: {sql}")
