@@ -27,6 +27,14 @@ DEFAULT_CONFIG = {
     "alternative_llm_engine": "",  # Only used if use_translation_llm is False
     "query_processing_depth": "standard",  # basic, standard, or detailed
     
+    # Enhanced conversation settings
+    "max_context_tokens": 25000,  # Maximum tokens to use for context (adjust based on your model)
+    "conversation_intelligence_enabled": True,  # Enable advanced conversation intelligence
+    "conversation_memory_length": 50,  # Number of messages to keep in conversation memory
+    "conversation_expiry_hours": 72,  # Hours before conversation context expires
+    "enable_entity_extraction": True,  # Extract entities and topics from queries
+    "enable_conversation_analysis": True,  # Analyze conversation patterns and themes
+    
     # Privacy settings
     "store_full_content": True,  # Store full message content
     "anonymize_senders": False,  # Anonymize sender information

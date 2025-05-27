@@ -14,6 +14,10 @@ from silentgem.config.insights_config import get_insights_config
 from silentgem.llm.llm_client import get_llm_client
 from silentgem.query_params import QueryParams
 
+# Simple cache for expanded query terms
+_expansion_cache = {}
+_expansion_cache_ttl = 600  # 10 minutes
+
 class SearchEngine:
     """Search engine for finding messages in the database"""
     
@@ -22,6 +26,11 @@ class SearchEngine:
         self.message_store = get_message_store()
         self.config = get_insights_config()
         self.llm_client = get_llm_client()
+        
+        # Performance settings
+        self.fast_mode = True  # Skip expensive LLM expansions
+        self.max_semantic_terms = 3  # Limit semantic expansion
+        self.enable_context_collection = False  # Skip context collection for speed
     
     async def search(self, search_params: QueryParams) -> List[Dict[str, Any]]:
         """
@@ -37,15 +46,15 @@ class SearchEngine:
         query = search_params.query
         chat_ids = [search_params.chat_id] if search_params.chat_id else None
         time_limit = search_params.get_time_range()
-        strategies = search_params.strategies
+        strategies = search_params.strategies or ["direct"]  # Default to direct only for speed
         
-        # Call the original search method with extracted parameters
+        # Call the optimized search method
         results, _ = await self._search(
             query=query,
             chat_ids=chat_ids,
             sender=search_params.sender,
-            collect_context=True,
-            llm_expand_query=True,
+            collect_context=self.enable_context_collection,
+            llm_expand_query=not self.fast_mode,  # Skip LLM expansion in fast mode
             max_results=search_params.limit,
             time_limit=time_limit,
             strategies=strategies,
@@ -53,37 +62,22 @@ class SearchEngine:
         )
         
         return results
-    
+
     async def _search(
         self,
         query: str,
         chat_ids: Optional[List[int]] = None,
         sender: Optional[str] = None,
-        collect_context: bool = True,
-        llm_expand_query: bool = True,
+        collect_context: bool = False,  # Default to False for speed
+        llm_expand_query: bool = False,  # Default to False for speed
         max_results: int = 50,
-        max_context_per_message: int = 10,
+        max_context_per_message: int = 5,  # Reduced for speed
         time_limit: Optional[Tuple[datetime, datetime]] = None,
         strategies: Optional[List[str]] = None,
         parsed_query: Optional[Dict[str, Any]] = None
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
-        Search for messages based on the provided query
-        
-        Args:
-            query: Search query string
-            chat_ids: Optional list of chat IDs to restrict search to
-            sender: Optional sender name to restrict search to
-            collect_context: Whether to collect context messages
-            llm_expand_query: Whether to use LLM to expand query semantically
-            max_results: Maximum number of search results to return
-            max_context_per_message: Maximum number of context messages to collect per result
-            time_limit: Optional tuple of (start_time, end_time) to restrict search to
-            strategies: List of search strategies to use (default: ["direct", "semantic"])
-            parsed_query: Optional pre-processed query information from QueryProcessor
-            
-        Returns:
-            Tuple of (search results, query metadata)
+        Search for messages based on the provided query (optimized for speed)
         """
         start_time = time.time()
         message_store = get_message_store()
@@ -91,109 +85,71 @@ class SearchEngine:
         if not query or not query.strip():
             logger.warning("Empty search query provided")
             return [], {"query": query, "expanded_queries": [], "strategies": [], "time": 0}
+
+        # Use simplified strategies for speed
+        if not strategies:
+            strategies = ["direct"]  # Only direct search by default
         
-        # Use provided strategies or get from parsed query if available
-        if not strategies and parsed_query and "search_strategies" in parsed_query:
-            strategies = parsed_query.get("search_strategies")
-        elif not strategies:
-            strategies = ["direct", "semantic"]
-        
-        # Check if we already have expanded terms from query processor
-        has_expanded_terms = False
-        expanded_terms = []
-        if parsed_query and "expanded_terms" in parsed_query:
-            expanded_terms = parsed_query.get("expanded_terms", [])
-            has_expanded_terms = bool(expanded_terms)
-        
-        # Process OR terms separately
-        # Check if query contains OR operators
+        # Process OR terms separately for better performance
         has_or_terms = " OR " in query
         flat_or_terms = []
         
         if has_or_terms:
-            # Split by " OR " to get all terms
-            flat_or_terms = query.split(" OR ")
-            flat_or_terms = [term.strip() for term in flat_or_terms if term.strip()]
-            
-            # First term will be used for direct search
+            flat_or_terms = [term.strip() for term in query.split(" OR ") if term.strip()]
             direct_search_query = flat_or_terms[0] if flat_or_terms else query
         else:
             direct_search_query = query
         
         results = []
         all_expanded_queries = []
-        direct_matches = set()  # Track direct match message IDs to prioritize them
+        direct_matches = set()
         
-        # Step 1: Direct search if enabled
-        if "direct" in strategies:
-            logger.debug(f"Performing direct search for: {direct_search_query}")
+        # Step 1: Direct search (always enabled for speed)
+        logger.debug(f"Performing direct search for: {direct_search_query}")
+        
+        # Search for main query terms
+        if direct_search_query:
+            direct_results = message_store.search_messages(
+                query=direct_search_query,
+                chat_ids=chat_ids,
+                sender=sender,
+                limit=max_results,
+                time_range=time_limit,
+            )
             
-            # Search for main query terms
-            if direct_search_query:
-                direct_results = message_store.search_messages(
-                    query=direct_search_query,
+            for msg in direct_results:
+                msg["match_type"] = "direct"
+                msg["matched_term"] = direct_search_query
+                direct_matches.add(msg["message_id"])
+            
+            results.extend(direct_results)
+            
+        # Search for OR terms if present
+        if has_or_terms and len(flat_or_terms) > 1:
+            for term in flat_or_terms[1:]:  # Skip first term as it's already searched
+                logger.debug(f"Searching for OR term: {term}")
+                or_results = message_store.search_messages(
+                    query=term,
                     chat_ids=chat_ids,
                     sender=sender,
-                    limit=max_results,
+                    limit=max_results // len(flat_or_terms),
                     time_range=time_limit,
                 )
                 
-                for msg in direct_results:
-                    msg["match_type"] = "direct"
-                    msg["matched_term"] = direct_search_query
-                    direct_matches.add(msg["message_id"])
-                
-                results.extend(direct_results)
-                
-            # Search for OR terms
-            if has_or_terms:
-                for term in flat_or_terms:
-                    logger.debug(f"Searching for OR term: {term}")
-                    or_results = message_store.search_messages(
-                        query=term,
-                        chat_ids=chat_ids,
-                        sender=sender,
-                        limit=max_results // 2,  # Limit results per OR term
-                        time_range=time_limit,
-                    )
-                    
-                    for msg in or_results:
-                        if msg["message_id"] not in direct_matches:  # Avoid duplicates with direct matches
-                            msg["match_type"] = "or_term"
-                            msg["matched_term"] = term
-                            results.append(msg)
-        
-        # Step 2: Semantic search if enabled
-        if "semantic" in strategies:
-            # Use expanded terms from QueryProcessor if available
-            if has_expanded_terms:
-                semantic_query_terms = expanded_terms
-                all_expanded_queries = expanded_terms.copy()
-                logger.debug(f"Using {len(semantic_query_terms)} expanded terms from query processor")
-            # Otherwise use LLM to expand query if requested
-            elif llm_expand_query and self.llm_client:
-                try:
-                    # Get semantically expanded queries
-                    semantic_query_terms = await self._process_query_with_llm(query)
-                    all_expanded_queries = semantic_query_terms.copy()
-                    
-                    # Remove the original query from expanded queries to avoid duplicate searches
-                    if query in semantic_query_terms:
-                        semantic_query_terms.remove(query)
-                    
-                    logger.debug(f"Using {len(semantic_query_terms)} expanded terms from LLM")
-                except Exception as e:
-                    logger.error(f"Error during semantic query expansion: {e}")
-                    semantic_query_terms = []
-            else:
-                semantic_query_terms = []
+                for msg in or_results:
+                    if msg["message_id"] not in direct_matches:
+                        msg["match_type"] = "or_term"
+                        msg["matched_term"] = term
+                        results.append(msg)
+
+        # Step 2: Semantic search (only if enabled and no direct results)
+        if "semantic" in strategies and not results and llm_expand_query:
+            semantic_query_terms = await self._get_cached_expansion(query)
             
-            # Perform semantic search with expanded terms
             if semantic_query_terms:
                 logger.debug(f"Performing semantic search with {len(semantic_query_terms)} expanded terms")
                 
-                for expanded_query in semantic_query_terms:
-                    # Skip very short expanded queries
+                for expanded_query in semantic_query_terms[:self.max_semantic_terms]:
                     if len(expanded_query.strip()) < 3:
                         continue
                         
@@ -201,32 +157,27 @@ class SearchEngine:
                         query=expanded_query,
                         chat_ids=chat_ids,
                         sender=sender,
-                        limit=max_results // len(semantic_query_terms),  # Distribute limit among expanded queries
+                        limit=max_results // len(semantic_query_terms),
                         time_range=time_limit,
                     )
                     
                     for msg in semantic_results:
-                        # Skip if this message was already found in direct search
-                        if msg["message_id"] in direct_matches:
-                            continue
-                            
-                        # Add semantic match info
-                        msg["match_type"] = "semantic"
-                        msg["matched_term"] = expanded_query
-                        results.append(msg)
-        
-        # Step 3: Fuzzy search if enabled
+                        if msg["message_id"] not in direct_matches:
+                            msg["match_type"] = "semantic"
+                            msg["matched_term"] = expanded_query
+                            results.append(msg)
+
+        # Step 3: Fuzzy search (only as last resort)
         if "fuzzy" in strategies and not results:
             logger.debug(f"Performing fuzzy search as fallback for: {query}")
             
-            # Simple fuzzy search implementation
             fuzzy_results = message_store.search_messages(
                 query=query,
                 chat_ids=chat_ids,
                 sender=sender,
                 limit=max_results,
                 time_range=time_limit,
-                fuzzy=True  # Enable fuzzy matching if supported by the database
+                fuzzy=True
             )
             
             for msg in fuzzy_results:
@@ -234,28 +185,18 @@ class SearchEngine:
                     msg["match_type"] = "fuzzy"
                     msg["matched_term"] = query
                     results.append(msg)
-        
-        # Deduplicate results based on message_id
+
+        # Deduplicate and sort results
         seen_ids = set()
         unique_results = []
         
-        # Define sort key to prioritize direct matches, then OR terms, then semantic matches, then fuzzy
+        # Simple sort by match type priority and timestamp
         def result_sort_key(msg):
-            # First sort by match type (direct > or_term > semantic > fuzzy)
-            match_type_priority = {
-                "direct": 0,
-                "or_term": 1,
-                "semantic": 2,
-                "fuzzy": 3
-            }
+            match_type_priority = {"direct": 0, "or_term": 1, "semantic": 2, "fuzzy": 3}
             priority = match_type_priority.get(msg.get("match_type", "semantic"), 4)
-            
-            # Then sort by timestamp (newest first)
-            timestamp = msg.get("timestamp", datetime.now())
-            
-            return (priority, -int(timestamp.timestamp() if isinstance(timestamp, datetime) else 0))
+            timestamp = msg.get("timestamp", 0)
+            return (priority, -timestamp)
         
-        # Sort and deduplicate
         for msg in sorted(results, key=result_sort_key):
             if msg["message_id"] not in seen_ids:
                 seen_ids.add(msg["message_id"])
@@ -264,16 +205,12 @@ class SearchEngine:
         # Limit total results
         final_results = unique_results[:max_results]
         
-        # Collect context for each result
+        # Skip context collection for speed unless explicitly requested
         if collect_context:
             for msg in final_results:
-                context_messages = await self._collect_extended_context(
-                    msg,
-                    message_store,
-                    max_context=max_context_per_message
-                )
+                context_messages = await self._collect_minimal_context(msg, message_store, max_context_per_message)
                 msg["context"] = context_messages
-        
+
         # Build metadata
         execution_time = time.time() - start_time
         metadata = {
@@ -283,13 +220,100 @@ class SearchEngine:
             "time": round(execution_time, 3)
         }
         
-        # Add parsed query information to metadata if available
         if parsed_query:
             metadata["parsed_query"] = parsed_query
         
         logger.info(f"Search for '{query}' found {len(final_results)} messages in {execution_time:.2f}s")
         return final_results, metadata
-    
+
+    async def _get_cached_expansion(self, query: str) -> List[str]:
+        """Get cached query expansion or generate new one"""
+        cache_key = query.lower().strip()
+        
+        # Check cache first
+        if cache_key in _expansion_cache:
+            cached_terms, timestamp = _expansion_cache[cache_key]
+            if time.time() - timestamp < _expansion_cache_ttl:
+                return cached_terms
+            else:
+                del _expansion_cache[cache_key]
+        
+        # Generate new expansion (simplified)
+        expanded_terms = self._simple_query_expansion(query)
+        
+        # Cache the result
+        _expansion_cache[cache_key] = (expanded_terms, time.time())
+        
+        return expanded_terms
+
+    def _simple_query_expansion(self, query: str) -> List[str]:
+        """Simple rule-based query expansion without LLM"""
+        expanded = []
+        query_lower = query.lower()
+        
+        # Simple synonym mapping for common terms
+        synonyms = {
+            "price": ["cost", "value", "pricing"],
+            "buy": ["purchase", "acquire", "get"],
+            "sell": ["sale", "selling", "sold"],
+            "good": ["great", "excellent", "nice"],
+            "bad": ["poor", "terrible", "awful"],
+            "new": ["latest", "recent", "fresh"],
+            "old": ["previous", "past", "former"],
+            "big": ["large", "huge", "massive"],
+            "small": ["tiny", "little", "mini"]
+        }
+        
+        # Add synonyms for words in the query
+        words = query_lower.split()
+        for word in words:
+            if word in synonyms:
+                expanded.extend(synonyms[word])
+        
+        # Add partial matches
+        if len(query) > 6:
+            # Add query without last word
+            words = query.split()
+            if len(words) > 1:
+                expanded.append(" ".join(words[:-1]))
+        
+        # Remove duplicates and limit
+        expanded = list(set(expanded))[:self.max_semantic_terms]
+        
+        return expanded
+
+    async def _collect_minimal_context(
+        self, 
+        message: Dict[str, Any], 
+        message_store,
+        max_context: int = 3  # Reduced for speed
+    ) -> List[Dict[str, Any]]:
+        """
+        Collect minimal context around a message for speed
+        """
+        try:
+            message_id = message.get("id")
+            if not message_id:
+                return []
+            
+            # Get minimal context (fewer messages)
+            context = message_store.get_message_context(
+                message_id=message_id,
+                before_count=max_context // 2,
+                after_count=max_context // 2,
+                cross_chat_context=False  # Stay within same chat for speed
+            )
+            
+            # Combine before and after context
+            all_context = context.get("before", []) + context.get("after", [])
+            
+            # Limit and return
+            return all_context[:max_context]
+            
+        except Exception as e:
+            logger.warning(f"Error collecting context for message {message.get('id')}: {e}")
+            return []
+
     async def _process_query_with_llm(self, query: str) -> List[str]:
         """
         Process query with LLM to expand it semantically
@@ -362,14 +386,16 @@ Return your response as a JSON object with this structure:
                 # First try to parse the raw response
                 try:
                     parsed_response = json.loads(response)
+                    logger.debug(f"Successfully parsed JSON from search LLM")
                 except json.JSONDecodeError:
                     # If that fails, try to extract JSON using regex
-                    logger.warning("Initial JSON parsing failed, trying to extract JSON with regex")
+                    logger.info("Initial JSON parsing failed, trying to extract JSON with regex")
                     json_match = re.search(r'({[\s\S]*})', response)
                     if json_match:
                         json_str = json_match.group(1)
                         try:
                             parsed_response = json.loads(json_str)
+                            logger.debug(f"Successfully extracted JSON with regex")
                         except json.JSONDecodeError:
                             # Better JSON cleanup strategy
                             logger.warning("Regex extraction failed, trying advanced JSON cleanup")
@@ -384,39 +410,19 @@ Return your response as a JSON object with this structure:
                             
                             try:
                                 parsed_response = json.loads(cleaned_json)
+                                logger.debug(f"Successfully parsed JSON after cleanup")
                             except json.JSONDecodeError:
-                                # Last resort: strip any extra text and reconstruct the JSON
-                                logger.warning("Advanced cleanup failed, trying line-by-line reconstruction")
-                                lines = json_str.split('\n')
-                                # Find valid JSON content
-                                json_content = {}
-                                
-                                # Extract arrays from the text
-                                expanded_terms = re.findall(r'"expanded_terms"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
-                                if expanded_terms:
-                                    terms = re.findall(r'"([^"]+)"', expanded_terms[0])
-                                    json_content["expanded_terms"] = terms or []
-                                
-                                key_concepts = re.findall(r'"key_concepts"\s*:\s*\[(.*?)\]', json_str, re.DOTALL)
-                                if key_concepts:
-                                    concepts = re.findall(r'"([^"]+)"', key_concepts[0])
-                                    json_content["key_concepts"] = concepts or []
-                                    
-                                entity_type = re.findall(r'"entity_type"\s*:\s*"([^"]+)"', json_str)
-                                if entity_type:
-                                    json_content["entity_type"] = entity_type[0]
-                                    
-                                if json_content:
-                                    parsed_response = json_content
-                                else:
-                                    logger.error(f"Failed to parse LLM response after all cleanup attempts")
-                                    return [query]
+                                # Last resort: extract terms manually
+                                logger.warning("Advanced cleanup failed, extracting terms manually")
+                                parsed_response = self._extract_terms_manually(response, query)
                     else:
                         # No JSON-like content found
-                        logger.warning(f"No JSON found in LLM response: {response}")
-                        # Try to intelligently extract some value anyway
-                        expanded_query = self._extract_fallback_terms(query, response)
-                        return expanded_query if expanded_query else [query]
+                        logger.warning(f"No JSON found in LLM response, using manual extraction")
+                        parsed_response = self._extract_terms_manually(response, query)
+                
+                if not parsed_response or not isinstance(parsed_response, dict):
+                    logger.warning("Invalid parsed response, using fallback")
+                    return [query]
                 
                 expanded_terms = parsed_response.get("expanded_terms", [])
                 key_concepts = parsed_response.get("key_concepts", [])
@@ -439,10 +445,11 @@ Return your response as a JSON object with this structure:
                 seen = set()
                 unique_terms = []
                 for term in all_terms:
-                    term_lower = term.lower()
-                    if term_lower not in seen:
-                        seen.add(term_lower)
-                        unique_terms.append(term)
+                    if term and isinstance(term, str):
+                        term_lower = term.lower()
+                        if term_lower not in seen:
+                            seen.add(term_lower)
+                            unique_terms.append(term)
                 
                 logger.debug(f"Expanded query '{query}' to {len(unique_terms)} terms: {unique_terms}")
                 logger.info(f"Expanded query: {' OR '.join(unique_terms)}")
@@ -624,6 +631,75 @@ Return your response as a JSON object with this structure:
             # Format as date
             dt = datetime.fromtimestamp(timestamp)
             return dt.strftime("%Y-%m-%d %H:%M")
+    
+    def _extract_terms_manually(self, response: str, query: str) -> Dict[str, Any]:
+        """
+        Manually extract search terms when JSON parsing fails completely
+        
+        Args:
+            response: The raw LLM response
+            query: The original query
+            
+        Returns:
+            dict: Extracted terms in expected format
+        """
+        try:
+            # Start with the original query
+            terms = [query]
+            
+            # Extract anything that looks like it could be a search term
+            # Look for lists like "1. term1", "- term2", etc.
+            list_items = re.findall(r'(?:^|\n)\s*(?:[0-9]+\.|\-|\*)\s*([^\n]+)', response)
+            if list_items:
+                terms.extend([item.strip() for item in list_items if item.strip()])
+            
+            # Look for quoted strings which might contain search terms
+            quoted = re.findall(r'"([^"]+)"', response)
+            if quoted:
+                terms.extend([q.strip() for q in quoted if q.strip() and len(q.strip()) > 2])
+            
+            # Look for terms after common phrases
+            phrase_patterns = [
+                r'(?:terms?|keywords?|search for|look for|find):\s*([^\n]+)',
+                r'(?:related|similar|expanded):\s*([^\n]+)',
+                r'(?:also try|alternatives?):\s*([^\n]+)'
+            ]
+            
+            for pattern in phrase_patterns:
+                matches = re.findall(pattern, response, re.IGNORECASE)
+                for match in matches:
+                    # Split on common separators
+                    split_terms = re.split(r'[,;|]', match)
+                    terms.extend([t.strip() for t in split_terms if t.strip()])
+            
+            # For place-related queries, add some standard place terms
+            if "place" in query.lower() or "city" in query.lower() or "location" in query.lower():
+                place_terms = ["cities", "towns", "locations", "places", "areas", "regions", "territories"]
+                terms.extend(place_terms)
+            
+            # Remove duplicates and very short terms
+            unique_terms = []
+            seen = set()
+            for term in terms:
+                if term and len(term) > 2:
+                    term_clean = term.lower().strip()
+                    if term_clean not in seen:
+                        seen.add(term_clean)
+                        unique_terms.append(term.strip())
+            
+            return {
+                "expanded_terms": unique_terms[1:] if len(unique_terms) > 1 else [],  # Exclude original query
+                "key_concepts": [],
+                "entity_type": "other"
+            }
+            
+        except Exception as e:
+            logger.warning(f"Manual term extraction failed: {e}")
+            return {
+                "expanded_terms": [],
+                "key_concepts": [],
+                "entity_type": "other"
+            }
 
 
 # Singleton instance

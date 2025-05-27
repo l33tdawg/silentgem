@@ -190,86 +190,48 @@ class QueryProcessor:
     
     async def _process_with_advanced_llm(self, query_text: str, depth: str = "standard") -> Optional[Dict[str, Any]]:
         """
-        Process query using advanced LLM analysis to extract search parameters
+        Process query using advanced LLM with structured output
         
         Args:
-            query_text: The raw query text
-            depth: The processing depth (standard or detailed)
+            query_text: The query text to process
+            depth: Processing depth ("standard" or "detailed")
             
         Returns:
-            dict: Extracted parameters or None on failure
+            dict: Processed query parameters or None if processing fails
         """
         try:
-            # Get LLM client
             llm_client = self.llm_client
             if not llm_client:
-                logger.warning("LLM client not available for advanced query processing")
+                logger.warning("No LLM client available for advanced query processing")
                 return None
             
-            # Determine temperature and max tokens based on depth
+            # Configure based on depth
             if depth == "detailed":
-                temp = 0.2
-                max_tokens = 800
+                max_tokens = 400
+                temp = 0.3
             else:
-                temp = 0.1
-                max_tokens = 500
+                max_tokens = 250
+                temp = 0.4
             
-            # Construct system prompt based on depth
-            if depth == "standard":
-                system_prompt = """You are an advanced query analyzer for a conversational chat search system that helps users find messages and understand discussions across multiple channels.
+            # Build system prompt
+            system_prompt = """You are a query analysis assistant. Analyze the user's query and return a JSON object with the following structure:
 
-Your task is to analyze the user's request and extract the key information needed to find relevant content, while also understanding the conversational intent behind the query.
+{
+  "processed_query": "cleaned and optimized version of the query",
+  "expanded_terms": ["list", "of", "related", "search", "terms"],
+  "time_period": "today|yesterday|week|month|null",
+  "sender": "person name if query is about someone specific, otherwise null",
+  "intent": "search|summarize|analyze|track_evolution|compare"
+}
 
-The user may be asking about:
-- Specific topics, events, or facts mentioned in conversations
-- What someone said about a particular subject
-- Recent developments on a topic
-- The status of a project or situation
-- Comparisons between different viewpoints
-- Summaries of discussions
+Guidelines:
+- processed_query: Remove filler words, keep core meaning
+- expanded_terms: Add synonyms and related terms (max 5)
+- time_period: Extract if mentioned, otherwise null
+- sender: Only if asking about specific person
+- intent: Determine the user's goal
 
-Respond with a JSON object containing:
-- processed_query: The main search terms most likely to appear in relevant messages
-- expanded_terms: 5-8 semantically related terms that might appear in relevant messages
-- search_strategies: Array of strategies in priority order ["direct", "semantic", "fuzzy"]
-- time_period: Time period mentioned (today, yesterday, week, month, null)
-- sender: Person who sent the message mentioned (null if none)
-- intent: The search intent (search, summarize, analyze, compare, track_evolution)
-
-IMPORTANT: Focus on identifying terms that would actually appear in messages about this topic, not just conceptually related terms.
-"""
-            else:  # detailed
-                system_prompt = """You are an advanced query analyzer for a conversational chat search system that helps users find messages and understand discussions across multiple channels.
-
-Your task is to analyze the search query and extract key information that will help find the most relevant messages, while understanding the deeper conversational intent behind the query.
-
-The user may be asking about:
-- Specific topics, events, or facts mentioned in conversations
-- What someone said about a particular subject
-- Recent developments on a topic
-- The status of a project or situation
-- Comparisons between different viewpoints
-- Summaries of discussions
-- Insights across multiple conversations
-
-Focus on identifying:
-1. The core search terms - what would actually appear in messages about this topic
-2. Expanded terms - semantically related concepts that might appear in relevant messages
-3. Alternative phrasings - different ways people might express the same ideas
-4. Related entities - people, organizations, products, concepts related to the search
-5. Search strategies that would be most effective
-6. The conversational intent behind the query - what the user really wants to know
-
-Respond with a JSON object containing:
-- processed_query: The main search terms
-- expanded_terms: 5-8 semantically related terms/phrases
-- alternative_phrasings: 2-3 different ways to express the same query
-- related_entities: 2-4 entities related to the query
-- search_strategies: Array of strategies in priority order ["direct", "semantic", "fuzzy"]
-- time_period: Time period mentioned (today, yesterday, week, month, null)
-- sender: Person who sent the message mentioned (null if none)
-- intent: The search intent (search, summarize, analyze, compare, track_evolution, identify_sentiment)
-"""
+Return ONLY the JSON object, no other text."""
             
             # Process with LLM
             response = await llm_client.chat_completion([
@@ -279,258 +241,176 @@ Respond with a JSON object containing:
             
             if not response or not response.get("content"):
                 logger.warning("Empty response from LLM during advanced query processing")
-                return None
+                return self._create_fallback_result(query_text)
                 
             try:
                 # Extract JSON from response
                 content = response.get("content", "")
-                json_match = re.search(r'({[\s\S]*})', content)
                 
-                if json_match:
-                    json_str = json_match.group(1)
-                    result = json.loads(json_str)
-                    logger.debug(f"Processed query with advanced LLM: {result}")
+                # Try direct JSON parsing first
+                try:
+                    result = json.loads(content)
+                    logger.debug(f"Successfully parsed JSON from LLM response")
+                except json.JSONDecodeError:
+                    # Try to extract JSON with regex
+                    logger.info("Direct JSON parsing failed, trying regex extraction")
+                    json_match = re.search(r'({[\s\S]*})', content)
                     
-                    # Build a final result dictionary
-                    final_result = {
-                        "query_text": query_text,  # Default to original query
-                        "original_query_text": query_text,
-                        "expanded_terms": [],
-                        "search_strategies": ["direct", "semantic"],
-                        "time_period": None,
-                        "sender": None,
-                        "intent": "search",
-                    }
-                    
-                    # Get processed query and ensure it's a string
-                    processed_query = result.get("processed_query", query_text)
-                    if processed_query is not None:
-                        if isinstance(processed_query, list):
-                            processed_query = " ".join([str(item) for item in processed_query if item is not None])
-                        elif not isinstance(processed_query, str):
-                            processed_query = str(processed_query)
-                        final_result["query_text"] = processed_query
-                    
-                    # Add expanded terms if present
-                    if "expanded_terms" in result:
-                        expanded_terms = result["expanded_terms"]
-                        if expanded_terms and isinstance(expanded_terms, list):
-                            final_result["expanded_terms"] = [str(term) for term in expanded_terms if term is not None]
-                    
-                    # Add other fields if present
-                    if "search_strategies" in result:
-                        final_result["search_strategies"] = result["search_strategies"]
-                    if "time_period" in result:
-                        final_result["time_period"] = result["time_period"]
-                    if "sender" in result:
-                        final_result["sender"] = result["sender"]
-                    if "intent" in result:
-                        final_result["intent"] = result["intent"]
-                    
-                    # Add additional fields if present (for detailed mode)
-                    if "alternative_phrasings" in result:
-                        alt_phrasings = result["alternative_phrasings"]
-                        if alt_phrasings and isinstance(alt_phrasings, list):
-                            final_result["alternative_phrasings"] = [str(phrase) for phrase in alt_phrasings if phrase is not None]
-                        else:
-                            final_result["alternative_phrasings"] = alt_phrasings
-                    
-                    if "related_entities" in result:
-                        related_entities = result["related_entities"]
-                        if related_entities and isinstance(related_entities, list):
-                            final_result["related_entities"] = [str(entity) for entity in related_entities if entity is not None]
-                        else:
-                            final_result["related_entities"] = related_entities
-                    
-                    # Build a comprehensive search query if requested
-                    use_expanded_query = self.config.get("use_expanded_query", True)
-                    if use_expanded_query:
-                        # Build the expanded query
-                        expanded_query_parts = [final_result["query_text"]]
-                        
-                        # Add terms from expanded_terms
-                        expanded_terms = final_result.get("expanded_terms", [])
-                        if expanded_terms:
-                            # Ensure all items are strings
-                            expanded_terms = [str(term) for term in expanded_terms if term is not None]
-                            expanded_query_parts.extend(expanded_terms)
-                            
-                        # Add terms from alternative_phrasings
-                        alt_phrasings = final_result.get("alternative_phrasings", [])
-                        if alt_phrasings:
-                            # Ensure all items are strings
-                            alt_phrasings = [str(term) for term in alt_phrasings if term is not None]
-                            expanded_query_parts.extend(alt_phrasings)
-                        
-                        # Create OR query
-                        if len(expanded_query_parts) > 1:
-                            # Ensure all parts are strings before joining
-                            expanded_query_parts = [str(part) for part in expanded_query_parts if part is not None]
-                            final_result["query_text"] = " OR ".join(expanded_query_parts)
-                            logger.info(f"Expanded query: {final_result['query_text']}")
-                    
-                    return final_result
+                    if json_match:
+                        json_str = json_match.group(1)
+                        try:
+                            result = json.loads(json_str)
+                            logger.debug(f"Successfully extracted JSON with regex")
+                        except json.JSONDecodeError:
+                            logger.warning("Regex JSON extraction failed, using fallback parsing")
+                            result = self._parse_json_fallback(content, query_text)
+                    else:
+                        logger.warning("No JSON found in LLM response, using fallback")
+                        result = self._create_fallback_result(query_text)
                 
-                logger.warning(f"Failed to extract JSON from LLM response: {content[:100]}...")
-                return None
+                if not result or not isinstance(result, dict):
+                    logger.warning("Invalid result from JSON parsing, using fallback")
+                    return self._create_fallback_result(query_text)
                 
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON from LLM response: {e}")
-                return None
+                # Build a final result dictionary with safe defaults
+                final_result = {
+                    "query_text": query_text,  # Default to original query
+                    "original_query_text": query_text,
+                    "expanded_terms": [],
+                    "search_strategies": ["direct", "semantic"],
+                    "time_period": None,
+                    "sender": None,
+                    "intent": "search",
+                }
+                
+                # Get processed query and ensure it's a string
+                processed_query = result.get("processed_query", query_text)
+                if processed_query is not None:
+                    if isinstance(processed_query, list):
+                        processed_query = " ".join([str(item) for item in processed_query if item is not None])
+                    elif not isinstance(processed_query, str):
+                        processed_query = str(processed_query)
+                    final_result["query_text"] = processed_query
+                
+                # Add expanded terms if present
+                if "expanded_terms" in result:
+                    expanded_terms = result["expanded_terms"]
+                    if expanded_terms and isinstance(expanded_terms, list):
+                        final_result["expanded_terms"] = [str(term) for term in expanded_terms if term is not None]
+                
+                # Add other fields if present
+                if "search_strategies" in result:
+                    final_result["search_strategies"] = result["search_strategies"]
+                if "time_period" in result:
+                    final_result["time_period"] = result["time_period"]
+                if "sender" in result:
+                    final_result["sender"] = result["sender"]
+                if "intent" in result:
+                    final_result["intent"] = result["intent"]
+                
+                # Add additional fields if present (for detailed mode)
+                if "alternative_phrasings" in result:
+                    alt_phrasings = result["alternative_phrasings"]
+                    if alt_phrasings and isinstance(alt_phrasings, list):
+                        final_result["alternative_phrasings"] = [str(phrase) for phrase in alt_phrasings if phrase is not None]
+                    else:
+                        final_result["alternative_phrasings"] = alt_phrasings
+                
+                # Create expanded query if we have expanded terms
+                if final_result.get("expanded_terms"):
+                    expanded_query_parts = [final_result["query_text"]]
+                    
+                    # Add expanded terms
+                    for term in final_result["expanded_terms"]:
+                        if term and term not in expanded_query_parts:
+                            expanded_query_parts.append(str(term))
+                    
+                    # Create OR query
+                    if len(expanded_query_parts) > 1:
+                        # Ensure all parts are strings before joining
+                        expanded_query_parts = [str(part) for part in expanded_query_parts if part is not None]
+                        final_result["query_text"] = " OR ".join(expanded_query_parts)
+                        logger.info(f"Expanded query: {final_result['query_text']}")
+                
+                return final_result
+                
+            except Exception as e:
+                logger.warning(f"Error processing LLM response: {e}")
+                return self._create_fallback_result(query_text)
                 
         except Exception as e:
             logger.error(f"Error in advanced query processing with LLM: {e}")
-            return None
+            return self._create_fallback_result(query_text)
     
-    async def _process_with_llm(self, query_text, depth="standard"):
+    def _parse_json_fallback(self, content: str, query_text: str) -> Dict[str, Any]:
         """
-        Process query using the translation LLM (legacy method)
+        Fallback JSON parsing when standard parsing fails
         
         Args:
-            query_text: The raw query text
-            depth: The processing depth (standard or detailed)
+            content: The LLM response content
+            query_text: Original query text
             
         Returns:
-            dict: Extracted parameters or None on failure
+            dict: Parsed result or fallback
         """
         try:
-            # Construct prompt based on depth
-            if depth == "standard":
-                prompt = f"""
-                You're an advanced query analyst for a chat search system that helps users find insights in conversation history across multiple Telegram chat groups.
-                
-                TASK: Analyze this user query and extract search parameters to find the most relevant messages and generate valuable insights:
-                
-                USER QUERY: "{query_text}"
-                
-                ANALYSIS REQUIREMENTS:
-                1. Identify the main topics, entities, events, and concepts in the query
-                2. Think deeply about related topics that would yield valuable insights even if not explicitly mentioned
-                3. Consider different perspectives, viewpoints, or angles that might provide valuable context
-                4. Think about what information would be most valuable to answer this query comprehensively
-                
-                OUTPUT FORMAT - Return ONLY a JSON object with these fields:
-                - query_text: Primary search terms that directly match what user is looking for
-                - search_alternatives: Array of 5-8 alternative search phrases or related topics that would provide valuable context
-                - sub_topics: Array of 3-5 specific aspects or sub-topics of the main subject that should be included
-                - time_period: Timeframe (today, yesterday, week, month, or null)
-                - sender: Person who sent the message (null if not specified)
-                - intent: The intent (search, summarize, analyze, compare, track_evolution)
-                - knowledge_domains: Array of 2-3 relevant knowledge domains this query relates to (politics, technology, finance, etc.)
-                
-                ONLY RETURN THE JSON. Optimize each field to maximize search relevance and analytical value.
-                """
-            else:  # detailed
-                prompt = f"""
-                You're an advanced query analyst for a chat search system that helps users find deep insights in conversation history across multiple Telegram chat groups.
-                
-                TASK: Conduct a comprehensive analysis of this user query to extract parameters for finding the most relevant messages and generating sophisticated insights:
-                
-                USER QUERY: "{query_text}"
-                
-                COMPREHENSIVE ANALYSIS REQUIREMENTS:
-                1. Identify all topics, entities, events, and concepts in the query (both explicit and implied)
-                2. Think deeply about related topics that would yield valuable connections and insights
-                3. Consider multiple perspectives, viewpoints, or angles that would provide comprehensive context
-                4. Identify potential biases or assumptions in the query that should be balanced
-                5. Consider temporal aspects - how this topic may have evolved over time
-                6. Think about what information would be most valuable to the user beyond their literal request
-                
-                OUTPUT FORMAT - Return ONLY a JSON object with these fields:
-                - query_text: Primary search terms that directly match what user is looking for
-                - search_alternatives: Array of 5-10 alternative search phrases or related topics that would provide valuable context
-                - sub_topics: Array of 3-5 specific aspects or sub-topics of the main subject that should be included
-                - counter_perspectives: Array of 2-3 opposing or alternative viewpoints to consider
-                - time_period: Timeframe (today, yesterday, week, month, or null)
-                - sender: Person who sent the message (null if not specified)
-                - intent: The intent (search, summarize, analyze, compare, track_evolution, identify_sentiment)
-                - knowledge_domains: Array of 2-4 relevant knowledge domains this query relates to (politics, technology, finance, etc.)
-                - sentiment: Array of relevant sentiment aspects to look for (if applicable)
-                - entities: Array of key entities (people, organizations, places, products) central to this query
-                - context_requirements: Array of specific contextual elements needed for proper analysis
-                
-                ONLY RETURN THE JSON. Optimize each field to maximize search relevance and analytical depth.
-                """
+            # Try to extract individual fields using regex
+            result = {}
             
-            # Process with LLM
-            llm_response = await self.translator.translate(prompt, source_language="english")
+            # Extract processed_query
+            processed_match = re.search(r'"processed_query"\s*:\s*"([^"]*)"', content)
+            if processed_match:
+                result["processed_query"] = processed_match.group(1)
             
-            # Extract JSON from response (handle potential formatting issues)
-            import json
-            import re
+            # Extract expanded_terms array
+            terms_match = re.search(r'"expanded_terms"\s*:\s*\[(.*?)\]', content, re.DOTALL)
+            if terms_match:
+                terms_str = terms_match.group(1)
+                terms = re.findall(r'"([^"]*)"', terms_str)
+                result["expanded_terms"] = terms
             
-            # Try to find JSON-like content in the response
-            json_match = re.search(r'({[\s\S]*})', llm_response)
+            # Extract time_period
+            time_match = re.search(r'"time_period"\s*:\s*"([^"]*)"', content)
+            if time_match:
+                time_val = time_match.group(1)
+                result["time_period"] = time_val if time_val != "null" else None
             
-            if json_match:
-                json_str = json_match.group(1)
-                try:
-                    result = json.loads(json_str)
-                    logger.debug(f"Processed query with legacy LLM: {result}")
-                    
-                    # Convert legacy format to new format
-                    final_result = {
-                        "original_query_text": query_text,
-                        "time_period": result.get("time_period"),
-                        "sender": result.get("sender"),
-                        "intent": result.get("intent", "search"),
-                    }
-                    
-                    # Build a comprehensive search query with all extracted insights
-                    if "query_text" in result:
-                        # Extract the original query for reference
-                        processed_query = result.get("query_text", "")
-                        final_result["query_text"] = processed_query
-                        
-                        # Build expanded terms list
-                        expanded_terms = []
-                        
-                        # Add alternative search phrases if available
-                        alternatives = result.get("search_alternatives", [])
-                        if isinstance(alternatives, list) and alternatives:
-                            expanded_terms.extend(alternatives)
-                        
-                        # Add sub-topics if available
-                        sub_topics = result.get("sub_topics", [])
-                        if isinstance(sub_topics, list) and sub_topics:
-                            expanded_terms.extend(sub_topics)
-                            
-                        # Add counter perspectives if available
-                        counter_perspectives = result.get("counter_perspectives", [])
-                        if isinstance(counter_perspectives, list) and counter_perspectives:
-                            expanded_terms.extend(counter_perspectives)
-                        
-                        # Add entities if available
-                        entities = result.get("entities", [])
-                        if isinstance(entities, list) and entities:
-                            expanded_terms.extend(entities)
-                        
-                        # Filter and deduplicate terms
-                        if expanded_terms:
-                            expanded_terms = [term for term in expanded_terms if term and isinstance(term, str)]
-                            expanded_terms = list(set(expanded_terms))  # Remove duplicates
-                            final_result["expanded_terms"] = expanded_terms
-                            
-                            # Use the enhanced query for searching if configured
-                            use_expanded_query = self.config.get("use_expanded_query", True)
-                            if use_expanded_query and expanded_terms:
-                                # Create OR query combining original and expanded terms
-                                all_terms = [processed_query] + expanded_terms
-                                # Ensure all terms are strings before joining
-                                all_terms = [str(term) for term in all_terms if term is not None]
-                                final_result["query_text"] = " OR ".join(all_terms)
-                                logger.info(f"Enhanced search query: {final_result['query_text']}")
-                    
-                    return final_result
-                except json.JSONDecodeError:
-                    logger.warning(f"Failed to parse JSON from LLM response: {json_str}")
+            # Extract sender
+            sender_match = re.search(r'"sender"\s*:\s*"([^"]*)"', content)
+            if sender_match:
+                sender_val = sender_match.group(1)
+                result["sender"] = sender_val if sender_val != "null" else None
             
-            logger.warning(f"LLM response didn't contain valid JSON: {llm_response[:100]}...")
-            return None
+            # Extract intent
+            intent_match = re.search(r'"intent"\s*:\s*"([^"]*)"', content)
+            if intent_match:
+                result["intent"] = intent_match.group(1)
+            
+            return result if result else self._create_fallback_result(query_text)
             
         except Exception as e:
-            logger.error(f"Error processing query with legacy LLM: {e}")
-            return None
+            logger.warning(f"Fallback JSON parsing failed: {e}")
+            return self._create_fallback_result(query_text)
+    
+    def _create_fallback_result(self, query_text: str) -> Dict[str, Any]:
+        """
+        Create a fallback result when all parsing fails
+        
+        Args:
+            query_text: Original query text
+            
+        Returns:
+            dict: Basic fallback result
+        """
+        return {
+            "query_text": query_text,
+            "original_query_text": query_text,
+            "expanded_terms": [],
+            "search_strategies": ["direct", "semantic"],
+            "time_period": None,
+            "sender": None,
+            "intent": "search"
+        }
 
     def _parse_query(self, query_text: str) -> Dict[str, Any]:
         """
@@ -616,6 +496,117 @@ Respond with a JSON object containing:
         result["sender"] = sender
         
         return result
+
+    async def _process_with_llm(self, query_text, depth="standard"):
+        """
+        Process query using the translation LLM (legacy method)
+        
+        Args:
+            query_text: The raw query text
+            depth: The processing depth (standard or detailed)
+            
+        Returns:
+            dict: Extracted parameters or fallback result
+        """
+        try:
+            # Simplified prompt for better JSON compliance
+            prompt = f"""
+            Analyze this search query and return a JSON object with these fields:
+            
+            Query: "{query_text}"
+            
+            Return JSON with:
+            - processed_query: cleaned search terms
+            - expanded_terms: related search terms (max 5)
+            - time_period: today|yesterday|week|month|null
+            - sender: person name or null
+            - intent: search|summarize|analyze|track_evolution|compare
+            
+            Return ONLY valid JSON, no other text.
+            """
+            
+            # Process with LLM
+            llm_response = await self.translator.translate(prompt, source_language="english")
+            
+            if not llm_response:
+                logger.warning("Empty response from legacy LLM")
+                return self._create_fallback_result(query_text)
+            
+            # Extract JSON from response (handle potential formatting issues)
+            import json
+            import re
+            
+            try:
+                # Try direct JSON parsing first
+                result = json.loads(llm_response)
+                logger.debug(f"Successfully parsed JSON from legacy LLM")
+            except json.JSONDecodeError:
+                # Try to find JSON-like content in the response
+                logger.info("Direct JSON parsing failed, trying regex extraction")
+                json_match = re.search(r'({[\s\S]*})', llm_response)
+                
+                if json_match:
+                    json_str = json_match.group(1)
+                    try:
+                        result = json.loads(json_str)
+                        logger.debug(f"Successfully extracted JSON with regex")
+                    except json.JSONDecodeError:
+                        logger.warning("Regex JSON extraction failed, using fallback parsing")
+                        result = self._parse_json_fallback(llm_response, query_text)
+                else:
+                    logger.warning("No JSON found in legacy LLM response, using fallback")
+                    return self._create_fallback_result(query_text)
+            
+            if not result or not isinstance(result, dict):
+                logger.warning("Invalid result from legacy LLM, using fallback")
+                return self._create_fallback_result(query_text)
+            
+            # Convert legacy format to new format
+            final_result = {
+                "original_query_text": query_text,
+                "time_period": result.get("time_period"),
+                "sender": result.get("sender"),
+                "intent": result.get("intent", "search"),
+            }
+            
+            # Build a comprehensive search query with all extracted insights
+            if "processed_query" in result:
+                # Extract the original query for reference
+                processed_query = result.get("processed_query", query_text)
+                final_result["query_text"] = processed_query
+                
+                # Build expanded terms list
+                expanded_terms = []
+                
+                # Add expanded terms if available
+                if "expanded_terms" in result:
+                    terms = result.get("expanded_terms", [])
+                    if isinstance(terms, list):
+                        expanded_terms.extend([str(term) for term in terms if term])
+                
+                # Filter and deduplicate terms
+                if expanded_terms:
+                    expanded_terms = list(set(expanded_terms))  # Remove duplicates
+                    final_result["expanded_terms"] = expanded_terms
+                    
+                    # Use the enhanced query for searching if configured
+                    use_expanded_query = self.config.get("use_expanded_query", True)
+                    if use_expanded_query and expanded_terms:
+                        # Create OR query combining original and expanded terms
+                        all_terms = [processed_query] + expanded_terms
+                        # Ensure all terms are strings before joining
+                        all_terms = [str(term) for term in all_terms if term is not None]
+                        final_result["query_text"] = " OR ".join(all_terms)
+                        logger.info(f"Enhanced search query: {final_result['query_text']}")
+            else:
+                # No processed query found, use original
+                final_result["query_text"] = query_text
+            
+            return final_result
+            
+        except Exception as e:
+            logger.error(f"Error processing query with legacy LLM: {e}")
+            return self._create_fallback_result(query_text)
 
 # Singleton instance
 _instance = None
