@@ -347,6 +347,9 @@ class MessageStore:
                 sql += " OR LOWER(content) LIKE ?"
                 params.append(f"%{query.lower().replace(' ', '%')}%")
             
+            # Filter out all media messages since they have no value for LLM analysis
+            sql += " AND is_media = 0"
+            
             # Log the constructed query for debugging
             logger.debug(f"Search query: {sql}")
             logger.debug(f"Search params: {params}")

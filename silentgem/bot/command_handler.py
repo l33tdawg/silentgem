@@ -67,7 +67,7 @@ class CommandHandler:
         # Performance settings
         self.enable_caching = True
         self.enable_parallel_processing = True
-        self.fast_mode = True  # Skip some expensive operations for speed
+        self.fast_mode = False  # Enable full LLM processing for better responses
     
     def _get_conversation_intelligence(self):
         """Get conversation intelligence instance (lazy initialization)"""
@@ -268,20 +268,24 @@ class CommandHandler:
             search_params = None
             try:
                 from silentgem.query_params import QueryParams
+                # Determine if we should search across all chats
+                cross_chats = getattr(interpretation, "cross_chats", True)  # Default to True
+                search_chat_id = None if cross_chats else chat_id
+                
                 search_params = QueryParams(
                     query=getattr(interpretation, "processed_query", None) or query,
                     limit=15 if self.fast_mode else 20,  # Fewer results for speed
-                    chat_id=chat_id if chat_id and not getattr(interpretation, "cross_chats", False) else None,
+                    chat_id=search_chat_id,
                     time_period=getattr(interpretation, "time_period", None)
                 )
             except Exception as e:
                 logger.warning(f"Error preparing search parameters: {e}")
-                # Fallback to minimal search params
+                # Fallback to minimal search params - default to cross-chat search
                 from silentgem.query_params import QueryParams
                 search_params = QueryParams(
                     query=query,
                     limit=15 if self.fast_mode else 20,
-                    chat_id=chat_id
+                    chat_id=None  # Default to searching across all chats
                 )
 
             # Execute search with performance monitoring
@@ -339,7 +343,7 @@ class CommandHandler:
                 }
                 
                 # Use conversation intelligence for sophisticated response generation only if not in fast mode
-                if not self.fast_mode and chat_id and user_id:
+                if not self.fast_mode and user_id:
                     conversation_intelligence = self._get_conversation_intelligence()
                     if conversation_intelligence:
                         response = await conversation_intelligence.synthesize_intelligent_response(

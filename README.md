@@ -263,14 +263,15 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 - **Enhanced database performance**: Sub-100ms search times
 - **Memory optimization**: Efficient caching with automatic cleanup
 
-### ✅ Version 1.2.2 - Response Quality Enhancement (COMPLETED)
+### ✅ Version 1.2.2 - Response Quality & Search Enhancement (COMPLETED)
 
-**Focused on improving response quality and reducing verbosity:**
-- **Concise responses by default**: Direct, focused answers without unnecessary elaboration
+**Major improvements to response quality and search functionality:**
+- **Comprehensive yet focused responses**: Well-structured answers (400-800 characters) with sufficient detail
+- **Cross-chat search by default**: All searches now span across all monitored channels automatically
+- **Media filtering**: Removed irrelevant media messages (photos, videos) that provide no value for analysis
 - **Smart follow-up detection**: Avoids repeating information in follow-up questions
-- **Streamlined context processing**: Reduced prompt complexity for faster processing
-- **Optimized conversation intelligence**: Simplified analysis for better performance
-- **Reduced token usage**: Lower LLM costs and faster response generation
+- **LLM-processed responses**: Intelligent synthesis instead of raw search result lists
+- **Streamlined prompts**: Reduced complexity for faster processing and lower token usage
 
 ### Version 1.3 - Advanced Conversational Memory (Coming Soon)
 
