@@ -2,12 +2,11 @@
 
 ## Overview
 
-SilentGem now features a sophisticated conversation intelligence system that leverages large context windows (25k+ tokens) to provide rich, contextual, and insightful conversations. This system transforms the bot from a simple search interface into an intelligent conversation partner that understands context, tracks topics, and provides deep insights.
+SilentGem now features a sophisticated conversation intelligence system that leverages large context windows to provide rich, contextual, and insightful conversations. This system transforms the bot from a simple search interface into an intelligent conversation partner that understands context, tracks topics, and provides deep insights.
 
 ## 🚀 Key Features
 
 ### 1. **Large Context Window Utilization**
-- **25,000+ token context window** support (configurable)
 - **Intelligent context management** with automatic trimming
 - **Full conversation history** integration into responses
 - **Rich metadata** preservation across conversation turns
