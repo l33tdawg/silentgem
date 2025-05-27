@@ -397,7 +397,7 @@ class CommandHandler:
                         user_id=user_id,
                         role="assistant",
                         content=response,
-                        results_found=len(safe_messages),
+                        search_results_count=len(safe_messages),
                         query_type="search_response"
                     )
                 except Exception as e:
