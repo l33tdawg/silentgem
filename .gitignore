@@ -36,15 +36,9 @@ ENV/
 backups/
 sessions/
 
-# Application specific
-data/mapping.json
-data/backups/*
-data/message_state.json
-data/messages.db
-data/messages.db-*
-data/insights_config.json
-data/*.db
-data/*.json
+# Application specific - User data directory
+data/
+!data/.gitkeep
 chat_ids.txt
 logs/
 

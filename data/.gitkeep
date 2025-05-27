@@ -1,0 +1,2 @@
+# This file ensures the data/ directory is preserved in git
+# All other files in this directory are ignored for privacy and security 
