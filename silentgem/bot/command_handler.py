@@ -662,6 +662,171 @@ class CommandHandler:
                 return location
             
         return ""
+    
+    async def _enhance_query_with_context(
+        self,
+        current_query: str,
+        previous_query: str,
+        conversation_history: List[Dict[str, str]],
+        entities: List[str],
+        topics: List[str]
+    ) -> str:
+        """
+        Enhance a follow-up query with conversation context using LLM
+        
+        Args:
+            current_query: The current user query
+            previous_query: The previous user query
+            conversation_history: List of previous conversation messages
+            entities: Extracted entities from current query
+            topics: Extracted topics from current query
+            
+        Returns:
+            str: Enhanced query that incorporates necessary context
+        """
+        try:
+            # Get conversation intelligence
+            conversation_intelligence = self._get_conversation_intelligence()
+            if not conversation_intelligence or not conversation_intelligence.llm_client:
+                # Fallback: simple context extraction
+                return self._simple_query_enhancement(current_query, previous_query)
+            
+            # Build a prompt to enhance the query
+            system_prompt = """You are a query enhancement assistant. Your job is to take a follow-up question and add necessary context from the previous conversation so it can be searched effectively.
+
+**Important Rules**:
+1. If the current query is complete and self-contained, return it unchanged
+2. If the current query references context from previous messages, merge that context into the query
+3. Keep the enhanced query natural and searchable
+4. Don't add unnecessary details - only add what's needed for understanding
+5. Return ONLY the enhanced query text, nothing else
+
+**Examples**:
+
+Previous: "What's the latest news about Gaza?"
+Current: "What cities are being affected?"
+Enhanced: "What cities in Gaza are being affected?"
+
+Previous: "Tell me about Apple's new product"
+Current: "When was it released?"
+Enhanced: "When was Apple's new product released?"
+
+Previous: "What happened in the Ukraine conflict?"
+Current: "Who is involved?"
+Enhanced: "Who is involved in the Ukraine conflict?"
+
+Previous: "Search for crypto news"
+Current: "What are the prices?"
+Enhanced: "What are the crypto prices?"
+
+Current: "Tell me about climate change" (complete query, no previous context needed)
+Enhanced: "Tell me about climate change"
+"""
+            
+            # Build context information
+            context_parts = []
+            
+            # Add recent conversation exchanges (last 2-3 exchanges)
+            if conversation_history and len(conversation_history) >= 2:
+                recent = conversation_history[-4:]  # Last 2 exchanges (user + assistant)
+                context_parts.append("## Recent Conversation:")
+                for msg in recent:
+                    role = msg.get("role", "").upper()
+                    content = msg.get("content", "")
+                    # Truncate long messages
+                    if len(content) > 100:
+                        content = content[:100] + "..."
+                    context_parts.append(f"{role}: {content}")
+            
+            # Add entities and topics if available
+            if entities or topics:
+                context_parts.append("\n## Context Information:")
+                if entities:
+                    context_parts.append(f"Entities mentioned: {', '.join(entities)}")
+                if topics:
+                    context_parts.append(f"Topics discussed: {', '.join(topics)}")
+            
+            # Build user prompt
+            user_prompt = f"""{chr(10).join(context_parts)}
+
+## Current Query to Enhance:
+{current_query}
+
+## Enhanced Query:"""
+            
+            # Call LLM to enhance the query
+            response = await conversation_intelligence.llm_client.chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.3,
+                max_tokens=100
+            )
+            
+            if response and response.get("content"):
+                enhanced = response["content"].strip()
+                # Remove any quotes or extra formatting
+                enhanced = enhanced.strip('"\'')
+                
+                # Sanity check: enhanced query shouldn't be dramatically longer
+                if len(enhanced) > len(current_query) * 3:
+                    logger.warning("Enhanced query too long, using fallback")
+                    return self._simple_query_enhancement(current_query, previous_query)
+                
+                # If enhancement is too similar or identical, return original
+                if enhanced.lower() == current_query.lower():
+                    return current_query
+                
+                return enhanced
+            
+            # Fallback if LLM fails
+            return self._simple_query_enhancement(current_query, previous_query)
+            
+        except Exception as e:
+            logger.warning(f"Error enhancing query with context: {e}")
+            return self._simple_query_enhancement(current_query, previous_query)
+    
+    def _simple_query_enhancement(self, current_query: str, previous_query: str) -> str:
+        """
+        Simple rule-based query enhancement as fallback
+        
+        Args:
+            current_query: Current user query
+            previous_query: Previous user query
+            
+        Returns:
+            str: Enhanced query
+        """
+        # Extract location/entity from previous query
+        location = self._extract_location_context(previous_query)
+        primary_topic = self._extract_primary_topic(previous_query)
+        
+        # Check if current query needs context
+        needs_context_phrases = [
+            "what cities", "which cities", "what places", "which places",
+            "what about", "who", "when", "where", "how many",
+            "what are", "which are", "who are", "list the", "name the"
+        ]
+        
+        current_lower = current_query.lower()
+        needs_context = any(phrase in current_lower for phrase in needs_context_phrases)
+        
+        if not needs_context:
+            return current_query
+        
+        # Add location context if available and relevant
+        if location and location.lower() not in current_lower:
+            if any(word in current_lower for word in ["cities", "places", "locations", "areas"]):
+                return f"{current_query} in {location}"
+        
+        # Add topic context if available and relevant
+        if primary_topic and primary_topic.lower() not in current_lower:
+            # For certain types of questions, add the topic
+            if any(phrase in current_lower for phrase in ["who", "what", "when", "which", "how"]):
+                return f"{current_query} about {primary_topic}"
+        
+        return current_query
 
 # Singleton pattern for accessing command handler
 _command_handler_instance = None

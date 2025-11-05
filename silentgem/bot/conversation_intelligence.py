@@ -212,16 +212,23 @@ Return your analysis as a JSON object with these fields:
 """
         
         if is_followup:
-            base_prompt += """**Follow-up Context**: This is a follow-up question. Answer the NEW question being asked, not the previous one. Don't repeat information from the previous response.
+            base_prompt += """**Follow-up Context**: This is a follow-up question in an ongoing conversation.
+- Read the "Previous Exchange" section carefully to understand the conversation context
+- The "Current Question" is what you need to answer NOW
+- Use context from previous exchanges to inform your answer
+- Answer the CURRENT question, incorporating relevant context naturally
+- Don't repeat information already provided unless directly relevant to the new question
+- If the current question asks for clarification or details about something mentioned previously, provide that specific information
 
 """
         
         base_prompt += """**Guidelines**:
-1. Start with the direct answer
+1. Start with the direct answer to the current question
 2. Provide relevant details and context in a second paragraph if helpful
 3. State facts naturally without referencing sources
 4. Be conversational and informative
-5. For follow-ups, focus only on what's new
+5. For follow-ups, understand the full context before answering
+6. If previous context is crucial to answering, incorporate it seamlessly
 
 """
         
@@ -239,24 +246,27 @@ Return your analysis as a JSON object with these fields:
         
         prompt_parts = []
         
-        # Current query
-        prompt_parts.append(f"## Query: {query}\n")
-        
-        # Include recent conversation context for follow-ups
+        # Include recent conversation context for follow-ups FIRST
         depth = rich_context.get("conversation_metadata", {}).get("total_exchanges", 0)
         if depth > 1 and rich_context.get("conversation_history"):
-            recent_messages = rich_context["conversation_history"][-2:]  # Last 2 messages only
+            # Get last 4 messages (2 exchanges) for better context
+            recent_messages = rich_context["conversation_history"][-4:] if len(rich_context["conversation_history"]) >= 4 else rich_context["conversation_history"]
             if recent_messages:
                 prompt_parts.append("## Previous Exchange:")
                 for msg in recent_messages:
                     role = msg.get("role", "").upper()
                     content = msg.get("content", "")
-                    if len(content) > 80:
-                        content = content[:80] + "..."
+                    # Show more of the previous context (not truncated too much)
+                    if len(content) > 200:
+                        content = content[:200] + "..."
                     prompt_parts.append(f"{role}: {content}")
+                prompt_parts.append("\n---")
                 prompt_parts.append("## Current Question:")
-                prompt_parts.append(f"User is now asking: {query}")
-                prompt_parts.append("")
+                prompt_parts.append(f"{query}")
+                prompt_parts.append("---\n")
+        else:
+            # For new conversations, just show the query
+            prompt_parts.append(f"## Query: {query}\n")
         
         # Search results - simplified format
         if search_results:
