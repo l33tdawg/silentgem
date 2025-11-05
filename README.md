@@ -23,6 +23,9 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - ⚡ Ultra-fast performance with 2-3 second response times (v1.2.1)
 - 🎯 Select from available Google Gemini models during setup (v1.3)
 - 🎨 Interactive terminal menus with arrow-key navigation (v1.4)
+- 🤖 AI-powered guided query suggestions as clickable buttons (v1.5)
+- 📖 One-click topic expansion for deep-dive exploration (v1.5)
+- 💾 Query templates for saving and reusing common searches (v1.5)
 
 ## Requirements
 
