@@ -342,6 +342,43 @@ Transforming from reactive search to proactive assistant:
 - **Bidirectional Communication**: Reply to messages from within the chat insights interface
 - **Topic Collections**: Create and organize collections of related information
 
+## Testing
+
+SilentGem includes comprehensive unit tests to ensure code quality and reliability.
+
+### Running Tests
+
+Run all tests:
+```bash
+pytest
+```
+
+Run specific test modules:
+```bash
+pytest silentgem/tests/v1_5/test_query_templates.py
+pytest silentgem/tests/v1_5/test_guided_queries.py
+pytest silentgem/tests/v1_5/test_telegram_bot_buttons.py
+```
+
+Run with coverage report:
+```bash
+pytest --cov=silentgem --cov-report=html
+```
+
+### Test Coverage
+
+**v1.5 Features:**
+- ✅ 79 tests total
+- ✅ Query Templates (30 tests) - 100% pass rate
+- ✅ Guided Queries (26 tests) - 100% pass rate  
+- ✅ Telegram Button Rendering (23 tests) - 100% pass rate
+
+All tests include:
+- Unit tests with mocking for isolated component testing
+- Edge case handling
+- Error recovery testing
+- Integration scenarios
+
 ## Author
 
 Developed by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)

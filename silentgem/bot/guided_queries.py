@@ -133,9 +133,9 @@ Always respond with valid JSON following the exact schema provided."""
         
         try:
             # Call LLM to generate suggestions
-            llm_response = await self.llm_client.generate(
+            llm_response = await self.llm_client.complete(
                 prompt=context_prompt,
-                system_prompt=system_prompt,
+                system=system_prompt,
                 temperature=0.7,
                 max_tokens=1000
             )
