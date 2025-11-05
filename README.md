@@ -316,22 +316,6 @@ Transforming from reactive search to proactive assistant:
 - **Bidirectional Communication**: Reply to messages from within the chat insights interface
 - **Topic Collections**: Create and organize collections of related information
 
-### Version 1.7 - Knowledge Organization
-
-Building a personal knowledge base from your conversations:
-- **Custom Tagging**: Tag and categorize important messages for easy retrieval
-- **Knowledge Persistence**: Save valuable insights for future reference
-- **Task Extraction**: Identify action items from conversations
-- **Reminder Integration**: Set reminders related to specific discussion topics
-
-### Version 1.8 - Analytics & Visualization
-
-Advanced analytical capabilities:
-- **Sentiment Analysis**: Track the emotional tone of discussions
-- **Topic Mapping**: Visual representation of related topics
-- **Participation Analytics**: Identify key contributors on specific topics
-- **Advanced Search**: Enhanced semantic search with better relevance and speed
-
 ## Author
 
 Developed by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)
