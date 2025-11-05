@@ -18,6 +18,7 @@ from silentgem.search.search_engine import get_search_engine
 from silentgem.bot.conversation_memory import get_conversation_memory
 from silentgem.llm.query_processor import QueryProcessor, QueryInterpretationResult
 from silentgem.query_params import QueryParams, ParamCompatibility
+from silentgem.bot.guided_queries import get_guided_query_generator, GuidedQuerySuggestions
 
 # Simple in-memory cache for query results
 _query_cache = {}
@@ -407,6 +408,176 @@ class CommandHandler:
             import traceback
             traceback.print_exc()
             return f"❌ Error processing query: {str(e)}"
+    
+    async def handle_query_with_suggestions(
+        self,
+        query: str,
+        chat_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        callback: Optional[Callable[[str], None]] = None,
+        verbosity: str = "standard",
+        include_quotes: bool = True,
+        include_timestamps: bool = True,
+        include_sender_info: bool = True,
+        include_channel_info: bool = True,
+        enable_guided_queries: bool = True
+    ) -> Tuple[str, Optional[GuidedQuerySuggestions]]:
+        """
+        Process a search query and return formatted results WITH guided query suggestions
+        
+        This is the v1.5 enhanced version that includes contextual follow-up questions,
+        expandable topics, and action buttons.
+        
+        Args:
+            query: The search query string
+            chat_id: ID of the chat where the query was sent
+            user_id: ID of the user who sent the query
+            callback: Optional callback function to stream partial results
+            verbosity: Verbosity level for response formatting
+            include_quotes: Whether to include quotes in the response
+            include_timestamps: Whether to include timestamps
+            include_sender_info: Whether to include sender info
+            include_channel_info: Whether to include channel info
+            enable_guided_queries: Whether to generate guided query suggestions
+            
+        Returns:
+            Tuple[str, Optional[GuidedQuerySuggestions]]: Response text and guided suggestions
+        """
+        # First, get the standard response
+        response = await self.handle_query(
+            query=query,
+            chat_id=chat_id,
+            user_id=user_id,
+            callback=callback,
+            verbosity=verbosity,
+            include_quotes=include_quotes,
+            include_timestamps=include_timestamps,
+            include_sender_info=include_sender_info,
+            include_channel_info=include_channel_info
+        )
+        
+        # If guided queries are disabled, return early
+        if not enable_guided_queries:
+            return response, None
+        
+        # Generate guided query suggestions
+        try:
+            # Re-execute the search to get results metadata
+            # (We could optimize this by caching, but for now, let's keep it simple)
+            cache_key = _cache_key(query, chat_id) if self.enable_caching else None
+            cached_result = _get_cached_result(cache_key) if cache_key else None
+            
+            if cached_result:
+                messages, _ = cached_result
+            else:
+                # Quick search to get metadata
+                from silentgem.query_params import QueryParams
+                search_params = QueryParams(
+                    query=query,
+                    limit=20,
+                    chat_id=None  # Cross-chat search
+                )
+                messages = await get_search_engine().search(search_params)
+            
+            # Build search metadata
+            search_metadata = self._build_search_metadata(messages, query)
+            
+            # Get conversation history
+            conversation_history = []
+            if chat_id and user_id:
+                try:
+                    raw_history = self.conversation_memory.get_conversation_history(chat_id, user_id)
+                    for msg in raw_history:
+                        if hasattr(msg, 'role') and hasattr(msg, 'content'):
+                            conversation_history.append({
+                                'role': msg.role,
+                                'content': msg.content
+                            })
+                except Exception as e:
+                    logger.warning(f"Error getting conversation history for guided queries: {e}")
+            
+            # Generate guided suggestions
+            guided_generator = get_guided_query_generator()
+            suggestions = await guided_generator.generate_suggestions(
+                query=query,
+                search_results=messages,
+                search_metadata=search_metadata,
+                conversation_history=conversation_history,
+                response_text=response
+            )
+            
+            logger.info(f"Generated {len(suggestions.follow_up_questions)} guided questions for query '{query}'")
+            return response, suggestions
+            
+        except Exception as e:
+            logger.error(f"Error generating guided queries: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return response without suggestions if generation fails
+            return response, None
+    
+    def _build_search_metadata(self, messages: List[Dict], query: str) -> Dict[str, Any]:
+        """Build metadata about search results for guided query generation"""
+        
+        # Extract channels
+        channels = list(set(
+            msg.get('source_chat_id') or msg.get('target_chat_id') or 'unknown'
+            for msg in messages
+        ))
+        
+        # Group by topics (simple keyword-based for now)
+        topics_found = {}
+        # You could enhance this with actual topic extraction later
+        # For now, just group by channel
+        for channel in channels:
+            channel_messages = [msg for msg in messages if (msg.get('source_chat_id') or msg.get('target_chat_id')) == channel]
+            if channel_messages:
+                topics_found[f"Channel {channel}"] = {
+                    'count': len(channel_messages),
+                    'messages': channel_messages
+                }
+        
+        return {
+            'total_messages': len(messages),
+            'channels': channels,
+            'topics_found': topics_found,
+            'date_range': self._get_date_range(messages),
+            'top_contributors': self._get_top_contributors(messages)
+        }
+    
+    def _get_date_range(self, messages: List[Dict]) -> str:
+        """Get the date range of messages"""
+        if not messages:
+            return "N/A"
+        
+        try:
+            timestamps = [msg.get('timestamp') for msg in messages if msg.get('timestamp')]
+            if timestamps:
+                from datetime import datetime
+                dates = [datetime.fromtimestamp(ts) if isinstance(ts, (int, float)) else ts for ts in timestamps]
+                dates = [d for d in dates if d]  # Filter out None
+                if dates:
+                    min_date = min(dates)
+                    max_date = max(dates)
+                    return f"{min_date.strftime('%b %d')} - {max_date.strftime('%b %d, %Y')}"
+        except Exception as e:
+            logger.warning(f"Error calculating date range: {e}")
+        
+        return "N/A"
+    
+    def _get_top_contributors(self, messages: List[Dict], limit: int = 5) -> List[str]:
+        """Get top contributors from messages"""
+        if not messages:
+            return []
+        
+        try:
+            from collections import Counter
+            senders = [msg.get('sender_name', 'Unknown') for msg in messages if msg.get('sender_name')]
+            counter = Counter(senders)
+            return [name for name, _ in counter.most_common(limit)]
+        except Exception as e:
+            logger.warning(f"Error getting top contributors: {e}")
+            return []
 
     def _extract_simple_time_period(self, query: str) -> Optional[str]:
         """Fast extraction of time period from query without LLM"""

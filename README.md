@@ -299,14 +299,40 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 - **Visual feedback**: See your current selection highlighted
 - **Better UX**: No more typing numbers or making typos
 
-### Version 1.5 - Advanced Conversational Memory (Coming Soon)
+### ✅ Version 1.5 - Advanced Conversational Memory (COMPLETED)
 
-Priority features planned for the next release:
-- **Cross-session Conversation Context**: Remember previous interactions across different sessions for even more natural follow-up questions
-- **Interactive Exploration**: Add buttons to responses for expanding details or exploring related topics
-- **Guided Queries**: Get suggestions for follow-up questions related to your current topic
-- **Query Templates**: Save and reuse common search patterns
-- **Performance Analytics**: Built-in performance monitoring and optimization suggestions
+**Intelligent conversation enhancement with guided exploration:**
+- ✅ **Guided Queries**: AI-generated contextual follow-up questions as clickable buttons
+- ✅ **Interactive Exploration**: Expand topics with one-click buttons for detailed information  
+- ✅ **Query Templates**: Save and reuse common search patterns for efficiency
+- ✅ **Smart Suggestions**: LLM analyzes conversation context to recommend relevant next questions
+- ✅ **Topic Expansion**: Deep-dive into substantial topics directly from search results
+- ✅ **Action Buttons**: Quick access to timeline views, contributor analysis, and template saving
+
+**How It Works:**
+When you ask the bot a question, it now provides intelligent follow-up suggestions as clickable Telegram buttons below the response. Simply tap a button to explore that direction - no typing required!
+
+**Example:**
+```
+You: "What happened with APIs last week?"
+
+Bot: [Provides detailed answer]
+
+Buttons shown:
+┌────────────────────────────────────────┐
+│ 1️⃣ What are the migration deadlines?   │
+├────────────────────────────────────────┤
+│ 2️⃣ Show technical implementation...    │
+├────────────────────────────────────────┤
+│ 3️⃣ Who are the main contributors?      │
+├────────────────────────────────────────┤
+│ 📖 Expand: GraphQL Migration (22 msgs) │
+├────────────────────────────────────────┤
+│ [📅 Timeline]      [👥 Contributors]    │
+└────────────────────────────────────────┘
+```
+
+Tap any button and the bot instantly processes that question!
 
 ### Version 1.6 - Proactive Assistant
 

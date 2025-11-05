@@ -143,6 +143,59 @@ class InsightsBot:
         except Exception as e:
             logger.error(f"Error stopping bot: {e}")
     
+    def _create_inline_keyboard(self, suggestions):
+        """
+        Create an inline keyboard from guided query suggestions
+        
+        Args:
+            suggestions: GuidedQuerySuggestions object
+            
+        Returns:
+            InlineKeyboardMarkup or None if no suggestions
+        """
+        if not suggestions:
+            return None
+        
+        keyboard = []
+        
+        # Add follow-up question buttons (max 3)
+        for i, question in enumerate(suggestions.follow_up_questions[:3], 1):
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"{i}️⃣ {question.question[:60]}{'...' if len(question.question) > 60 else ''}",
+                    callback_data=f"suggest:{i-1}"  # Zero-indexed for array access
+                )
+            ])
+        
+        # Add expandable topic buttons (if any)
+        for topic in suggestions.expandable_topics[:2]:  # Max 2 topics to avoid clutter
+            keyboard.append([
+                InlineKeyboardButton(
+                    text=f"📖 {topic.label[:50]}{'...' if len(topic.label) > 50 else ''}",
+                    callback_data=f"expand:{topic.id}"
+                )
+            ])
+        
+        # Add action buttons in a row (max 2 per row)
+        action_row = []
+        for button in suggestions.action_buttons[:4]:  # Max 4 action buttons
+            action_row.append(
+                InlineKeyboardButton(
+                    text=button.label,
+                    callback_data=button.callback_data
+                )
+            )
+            # Add row every 2 buttons
+            if len(action_row) == 2:
+                keyboard.append(action_row)
+                action_row = []
+        
+        # Add remaining action buttons if any
+        if action_row:
+            keyboard.append(action_row)
+        
+        return InlineKeyboardMarkup(keyboard) if keyboard else None
+    
     def _register_handlers(self):
         """Register message handlers for the bot"""
         # Command handler for /askgem command
@@ -155,16 +208,34 @@ class InsightsBot:
                     # Get verbosity setting
                     verbosity = self.config.get("response_verbosity", "standard")
                     
-                    # Use new interface
-                    response = await self.command_handler.handle_query(
+                    # Check if guided queries are enabled
+                    enable_guided = self.config.get("enable_guided_queries", True)
+                    
+                    # Use new interface with guided queries
+                    response, suggestions = await self.command_handler.handle_query_with_suggestions(
                         query=query,
-                        chat_id=message.chat.id,
-                        user_id=message.from_user.id if message.from_user else None,
-                        verbosity=verbosity
+                        chat_id=str(message.chat.id),
+                        user_id=str(message.from_user.id) if message.from_user else None,
+                        verbosity=verbosity,
+                        enable_guided_queries=enable_guided
                     )
                     
-                    # Send the response
-                    await message.reply(response, quote=True)
+                    # Store suggestions for this user (for callback handling)
+                    if suggestions:
+                        user_key = f"{message.chat.id}:{message.from_user.id if message.from_user else 'unknown'}"
+                        if not hasattr(self, '_user_suggestions'):
+                            self._user_suggestions = {}
+                        self._user_suggestions[user_key] = {
+                            'suggestions': suggestions,
+                            'original_query': query,
+                            'timestamp': time.time()
+                        }
+                    
+                    # Create inline keyboard from suggestions
+                    reply_markup = self._create_inline_keyboard(suggestions) if suggestions else None
+                    
+                    # Send the response with buttons
+                    await message.reply(response, quote=True, reply_markup=reply_markup)
                 else:
                     await message.reply("Please provide a query with the command.\nExample: `/askgem Who talked about API yesterday?`", quote=True)
             else:
@@ -220,16 +291,189 @@ class InsightsBot:
                 # Get verbosity setting
                 verbosity = self.config.get("response_verbosity", "standard")
                 
-                # Use new interface
-                response = await self.command_handler.handle_query(
+                # Check if guided queries are enabled
+                enable_guided = self.config.get("enable_guided_queries", True)
+                
+                # Use new interface with guided queries
+                response, suggestions = await self.command_handler.handle_query_with_suggestions(
                     query=message.text,
-                    chat_id=message.chat.id,
-                    user_id=message.from_user.id if message.from_user else None,
-                    verbosity=verbosity
+                    chat_id=str(message.chat.id),
+                    user_id=str(message.from_user.id) if message.from_user else None,
+                    verbosity=verbosity,
+                    enable_guided_queries=enable_guided
                 )
                 
-                # Send the response
-                await message.reply(response, quote=True)
+                # Store suggestions for this user (for callback handling)
+                if suggestions:
+                    user_key = f"{message.chat.id}:{message.from_user.id if message.from_user else 'unknown'}"
+                    if not hasattr(self, '_user_suggestions'):
+                        self._user_suggestions = {}
+                    self._user_suggestions[user_key] = {
+                        'suggestions': suggestions,
+                        'original_query': message.text,
+                        'timestamp': time.time()
+                    }
+                
+                # Create inline keyboard from suggestions
+                reply_markup = self._create_inline_keyboard(suggestions) if suggestions else None
+                
+                # Send the response with buttons
+                await message.reply(response, quote=True, reply_markup=reply_markup)
+        
+        # Handle callback queries (button clicks)
+        @self.bot.on_callback_query()
+        async def callback_query_handler(client, callback_query):
+            """Handle button clicks from inline keyboards"""
+            try:
+                data = callback_query.data
+                user_key = f"{callback_query.message.chat.id}:{callback_query.from_user.id}"
+                
+                # Get stored suggestions for this user
+                user_data = getattr(self, '_user_suggestions', {}).get(user_key)
+                
+                if not user_data:
+                    await callback_query.answer("Sorry, this session has expired. Please ask a new question.", show_alert=True)
+                    return
+                
+                suggestions = user_data['suggestions']
+                
+                # Answer the callback to remove loading state
+                await callback_query.answer()
+                
+                # Handle different callback types
+                if data.startswith("suggest:"):
+                    # User clicked a suggested follow-up question
+                    question_index = int(data.split(":")[1])
+                    
+                    if question_index < len(suggestions.follow_up_questions):
+                        suggested_question = suggestions.follow_up_questions[question_index].question
+                        
+                        # Process the suggested question as a new query
+                        verbosity = self.config.get("response_verbosity", "standard")
+                        enable_guided = self.config.get("enable_guided_queries", True)
+                        
+                        # Show thinking message
+                        thinking_msg = await callback_query.message.reply(
+                            f"🔍 {suggested_question}\n\n⏳ Searching..."
+                        )
+                        
+                        response, new_suggestions = await self.command_handler.handle_query_with_suggestions(
+                            query=suggested_question,
+                            chat_id=str(callback_query.message.chat.id),
+                            user_id=str(callback_query.from_user.id),
+                            verbosity=verbosity,
+                            enable_guided_queries=enable_guided
+                        )
+                        
+                        # Update stored suggestions
+                        if new_suggestions:
+                            user_data['suggestions'] = new_suggestions
+                            user_data['original_query'] = suggested_question
+                            user_data['timestamp'] = time.time()
+                        
+                        # Delete thinking message
+                        await thinking_msg.delete()
+                        
+                        # Create keyboard for new suggestions
+                        reply_markup = self._create_inline_keyboard(new_suggestions) if new_suggestions else None
+                        
+                        # Send the new response
+                        await callback_query.message.reply(
+                            f"🔍 {suggested_question}\n\n{response}",
+                            reply_markup=reply_markup
+                        )
+                    
+                elif data.startswith("expand:"):
+                    # User wants to expand a specific topic
+                    topic_id = data.split(":", 1)[1]
+                    
+                    # Find the topic in suggestions
+                    topic = None
+                    for t in suggestions.expandable_topics:
+                        if t.id == topic_id:
+                            topic = t
+                            break
+                    
+                    if topic:
+                        # Create a more detailed query about this topic
+                        expanded_query = f"Tell me more about {topic.label}"
+                        
+                        # Show thinking message
+                        thinking_msg = await callback_query.message.reply(
+                            f"📖 Expanding: {topic.label}\n\n⏳ Gathering details..."
+                        )
+                        
+                        verbosity = "detailed"  # Use detailed verbosity for expansion
+                        enable_guided = self.config.get("enable_guided_queries", True)
+                        
+                        response, new_suggestions = await self.command_handler.handle_query_with_suggestions(
+                            query=expanded_query,
+                            chat_id=str(callback_query.message.chat.id),
+                            user_id=str(callback_query.from_user.id),
+                            verbosity=verbosity,
+                            enable_guided_queries=enable_guided
+                        )
+                        
+                        # Delete thinking message
+                        await thinking_msg.delete()
+                        
+                        # Create keyboard for new suggestions
+                        reply_markup = self._create_inline_keyboard(new_suggestions) if new_suggestions else None
+                        
+                        # Send expanded information
+                        await callback_query.message.reply(
+                            f"📖 {topic.label}\n\n{response}",
+                            reply_markup=reply_markup
+                        )
+                
+                elif data.startswith("action:"):
+                    # Handle action buttons
+                    action_type = data.split(":", 1)[1]
+                    
+                    if action_type == "timeline":
+                        # Show timeline view
+                        await callback_query.message.reply(
+                            "📅 Timeline view coming soon in v1.6!\n\nThis will show chronological progression of discussions."
+                        )
+                    
+                    elif action_type == "contributors":
+                        # Show top contributors
+                        original_query = user_data.get('original_query', '')
+                        contributors_query = f"Who are the main people discussing {original_query}?"
+                        
+                        thinking_msg = await callback_query.message.reply("⏳ Analyzing contributors...")
+                        
+                        response, _ = await self.command_handler.handle_query_with_suggestions(
+                            query=contributors_query,
+                            chat_id=str(callback_query.message.chat.id),
+                            user_id=str(callback_query.from_user.id),
+                            verbosity="standard",
+                            enable_guided_queries=False
+                        )
+                        
+                        await thinking_msg.delete()
+                        await callback_query.message.reply(f"👥 Contributors\n\n{response}")
+                    
+                    elif action_type == "save_template":
+                        # Save query as template (will be implemented in query_templates.py)
+                        await callback_query.message.reply(
+                            "💾 Query template saving coming soon!\n\nThis will allow you to save and reuse common queries."
+                        )
+                    
+                    elif action_type == "export":
+                        # Export results
+                        await callback_query.message.reply(
+                            "📤 Export functionality coming soon!\n\nThis will allow you to export search results to various formats."
+                        )
+                    
+                    else:
+                        await callback_query.answer("Unknown action", show_alert=True)
+                
+            except Exception as e:
+                logger.error(f"Error handling callback query: {e}")
+                import traceback
+                traceback.print_exc()
+                await callback_query.answer("An error occurred processing your request.", show_alert=True)
     
     async def _idle(self):
         """Keep the bot running"""
