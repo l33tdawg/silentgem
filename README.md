@@ -135,9 +135,9 @@ SilentGem includes a powerful Chat Insight feature that allows you to query your
 
 ### Overview
 
-Chat Insights automatically stores all translated messages in a local database and provides a natural language interface to search and analyze your conversation history through a dedicated Telegram bot.
+Chat Insights automatically stores all translated messages in a local database and provides a natural language interface to search and analyze your conversation history through a **private Telegram bot**.
 
-**Important:** Since SilentGem already stores all messages in your local database, the bot does NOT need to be added to your source channels to search or analyze messages. The bot only needs to be present in channels where you want users to be able to issue commands and receive responses.
+**How It Works:** The bot is completely private to you and works transparently. You simply direct message the bot to ask questions, and it searches all messages stored in your local database. **You don't need to add the bot to any channels**—it searches everything automatically because the messages are already stored locally on your system.
 
 #### Latest Enhancements:
 
@@ -191,11 +191,11 @@ Chat Insights is enabled by default. You can customize its settings with:
 python silentgem.py --setup-insights
 ```
 
-During setup, you'll create a dedicated Telegram bot (via BotFather). The bot only needs to be added to channels where you want to issue commands and receive responses, not to the source channels being monitored.
+During setup, you'll create a **private Telegram bot** that's exclusively for your use. The bot works transparently by searching your local message database—**you don't need to add it to any channels**. Simply direct message the bot to search across all your stored conversations.
 
 #### Creating a Bot with BotFather
 
-To create a bot for Chat Insights:
+To create your private bot for Chat Insights:
 
 1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
 2. Start a chat with BotFather
@@ -206,35 +206,33 @@ To create a bot for Chat Insights:
 5. BotFather will give you a token (like `123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ`)
 6. Copy this token when prompted during the `--setup-insights` process
 
-The bot will be automatically added to your target channels during setup, or you can manually add it later.
+**Important**: This bot is completely private to you. It doesn't need to be added to any channels—it transparently searches all messages stored in your local database. Just open a direct message with your bot on Telegram and start asking questions about your conversations.
 
 ### Using Chat Insights
 
 Chat Insights understands natural language queries and provides **conversational responses that synthesize information** from relevant messages, rather than just listing search results. It also uses the context of your ongoing conversation for better follow-up answers.
 
-There are two ways to query your conversation history:
+#### How to Use Your Private Bot
 
-#### 1. Using the /askgem Command
-
-In any channel where the bot is present:
-
-```
-/askgem Who talked about APIs yesterday?
-```
-
-The bot will search all messages stored in your local database, including messages from channels where the bot is not a member.
-
-#### 2. Directly Messaging the Bot
-
-You can also directly message the bot with your query:
+Simply open a direct message with your bot on Telegram and ask any question:
 
 ```
 Who talked about APIs yesterday?
 ```
 
+The bot searches **all messages stored in your local database** from all monitored channels—automatically and transparently. You don't need to add the bot to any channels for it to work.
+
+**Optional**: If you prefer, you can also add the bot to specific channels and use the `/askgem` command:
+
+```
+/askgem Who talked about APIs yesterday?
+```
+
+But this is completely optional—direct messaging the bot is simpler and works exactly the same way.
+
 ### Example Queries
 
-Chat Insights understands natural language queries. Examples:
+Chat Insights understands natural language queries. Simply direct message your bot and ask questions like:
 
 - "What was discussed today?"
 - "Show messages from yesterday about the project"
@@ -244,7 +242,7 @@ Chat Insights understands natural language queries. Examples:
 - "Summarize what different groups are saying about the Ukraine situation"
 - "Compare discussions about the new feature across all channels"
 
-You can ask these questions in any target channel where the bot is present or in a direct message to the bot. The bot will search across all your channels and provide clickable links to the original messages.
+The bot searches **all your monitored channels** and provides conversational answers with clickable links to the original messages.
 
 ### Privacy and Security
 
