@@ -81,17 +81,25 @@ pip install -r requirements.txt
 
 The setup wizard will guide you through:
 - Setting up Telegram API credentials
-- Choosing between Gemini AI or Ollama for translation
+- Choosing between Gemini AI or Ollama for translation with interactive menus
 - Configuring API keys or local model settings
-- Selecting source chats to monitor
-- Setting up target channels for translations
+- Multi-selecting source chats to monitor (use SPACE to select)
+- Setting up target channels for translations with visual selection
 
 ## Usage
 
-Start the translation service:
+Start SilentGem (interactive menu):
 ```bash
 ./silentgem.py
 ```
+
+The interactive menu provides easy access to all features:
+- 🚀 Start/stop translation service
+- 📋 Manage chat mappings
+- ⚙️ Configure settings
+- 💡 Set up Chat Insights
+
+Navigate with arrow keys, select with ENTER.
 
 ### Command-line options
 
