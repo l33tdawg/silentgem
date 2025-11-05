@@ -16,8 +16,16 @@ class LLMClient:
         """Initialize the LLM client"""
         self.config = get_insights_config()
         self.api_key = self.config.get("llm_api_key", os.environ.get("GEMINI_API_KEY", ""))
-        self.model = self.config.get("llm_model", "llama3")  # Default to llama3 instead of gemini-pro
-        self.ollama_url = self.config.get("ollama_url", "http://localhost:11434")
+        
+        # Determine the model based on configured LLM engine
+        llm_engine = os.environ.get("LLM_ENGINE", "gemini").lower()
+        if llm_engine == "gemini":
+            default_model = os.environ.get("GEMINI_MODEL", "gemini-1.5-pro")
+        else:
+            default_model = os.environ.get("OLLAMA_MODEL", "llama3")
+        
+        self.model = self.config.get("llm_model", default_model)
+        self.ollama_url = self.config.get("ollama_url", os.environ.get("OLLAMA_URL", "http://localhost:11434"))
         self._client = None
         self._client_type = None
         

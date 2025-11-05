@@ -21,6 +21,7 @@ LLM_ENGINE = os.getenv("LLM_ENGINE", "gemini").lower()  # Options: "gemini" or "
 
 # Gemini settings
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
 
 # Ollama settings
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")

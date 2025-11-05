@@ -2,6 +2,7 @@
 Translation service using Google Gemini API or Ollama
 """
 
+import os
 import google.generativeai as genai
 from loguru import logger
 import httpx
@@ -143,8 +144,8 @@ class GeminiTranslator(BaseTranslator):
             print(f"🔧 Initializing Gemini API with key: {GEMINI_API_KEY[:4]}{'*' * 12}")
             print(f"🔧 Target language set to: {TARGET_LANGUAGE}")
             
-            # Using the requested experimental model
-            model_name = 'gemini-2.0-flash-thinking-exp-01-21'
+            # Get the configured model from environment or use default
+            model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
             print(f"🔧 Setting up model: {model_name}")
             
             try:
@@ -155,7 +156,7 @@ class GeminiTranslator(BaseTranslator):
                 
                 # Try an alternative model as fallback
                 print("🔄 Trying fallback model...")
-                model_name = 'gemini-pro'
+                model_name = 'gemini-1.5-pro'
                 self.model = genai.GenerativeModel(model_name)
                 print(f"✅ Successfully created fallback Gemini model: {model_name}")
                 

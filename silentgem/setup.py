@@ -6,6 +6,7 @@ import os
 import json
 import asyncio
 import httpx
+import inquirer
 from pathlib import Path
 from getpass import getpass
 from pyrogram import Client, errors
@@ -40,26 +41,86 @@ async def setup_wizard():
         print("❌ API Hash cannot be empty. Please try again.")
         return False
     
-    # LLM Engine selection
-    print("\nSelect which translation engine to use:")
-    print("1. Google Gemini (cloud-based)")
-    print("2. Ollama (local)")
+    # LLM Engine selection using inquirer
+    questions = [
+        inquirer.List('llm_engine',
+                     message="Select which translation engine to use",
+                     choices=[
+                         ('Google Gemini (cloud-based)', 'gemini'),
+                         ('Ollama (local)', 'ollama')
+                     ],
+                     default='gemini'
+        )
+    ]
     
-    llm_choice = input("Enter your choice (1 or 2): ").strip()
-    
-    llm_engine = "gemini"  # Default
+    answers = inquirer.prompt(questions)
+    if not answers:
+        print("❌ Setup cancelled.")
+        return False
+        
+    llm_engine = answers['llm_engine']
     gemini_api_key = ""
     ollama_url = "http://localhost:11434"
     ollama_model = "llama3"
     
-    if llm_choice == "1" or llm_choice.lower() == "gemini":
+    gemini_model = "gemini-1.5-pro"  # Default model
+    
+    if llm_engine == "gemini":
         llm_engine = "gemini"
         gemini_api_key = input("Enter your Google Gemini API key: ").strip()
         if not gemini_api_key:
             print("❌ Gemini API key cannot be empty. Please try again.")
             return False
+        
+        # Fetch available Gemini models
+        print(f"\nFetching available Google Gemini models...")
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_api_key)
             
-    elif llm_choice == "2" or llm_choice.lower() == "ollama":
+            # Get list of available models
+            models = genai.list_models()
+            gemini_models = [
+                model for model in models 
+                if 'generateContent' in model.supported_generation_methods
+            ]
+            
+            if gemini_models:
+                model_choices = [(model.name.replace('models/', ''), model.name.replace('models/', '')) 
+                                for model in gemini_models]
+                
+                # Add a default option at the top
+                model_choices.insert(0, ('gemini-1.5-pro (recommended)', 'gemini-1.5-pro'))
+                
+                questions = [
+                    inquirer.List('model',
+                                 message="Select a Gemini model",
+                                 choices=model_choices,
+                                 default='gemini-1.5-pro'
+                    )
+                ]
+                
+                model_answer = inquirer.prompt(questions)
+                if model_answer:
+                    gemini_model = model_answer['model']
+                    print(f"✅ Selected model: {gemini_model}")
+                else:
+                    gemini_model = "gemini-1.5-pro"
+                    print("Using default model: gemini-1.5-pro")
+            else:
+                print("⚠️  No models found. Using default: gemini-1.5-pro")
+                gemini_model = "gemini-1.5-pro"
+                
+        except ImportError:
+            print("⚠️  google-generativeai package not installed. Using default: gemini-1.5-pro")
+            print("Install with: pip install google-generativeai")
+            gemini_model = "gemini-1.5-pro"
+        except Exception as e:
+            print(f"⚠️  Error fetching models: {e}")
+            print("Using default: gemini-1.5-pro")
+            gemini_model = "gemini-1.5-pro"
+            
+    elif llm_engine == "ollama":
         llm_engine = "ollama"
         
         # Ollama configuration
@@ -74,25 +135,22 @@ async def setup_wizard():
                 if response.status_code == 200:
                     models = response.json().get("models", [])
                     if models:
-                        print("\nAvailable models:")
-                        for i, model in enumerate(models, 1):
-                            model_name = model.get("name", "unknown")
-                            model_size = model.get("size", 0) // (1024 * 1024)  # Convert to MB
-                            print(f"{i}. {model_name} ({model_size} MB)")
+                        model_choices = [(f"{model.get('name', 'unknown')} ({model.get('size', 0) // (1024 * 1024)} MB)", 
+                                        model.get('name', 'unknown')) 
+                                       for model in models]
                         
-                        print("\nSelect a model by number or enter a name directly:")
-                        model_choice = input("> ").strip()
+                        questions = [
+                            inquirer.List('model',
+                                         message="Select an Ollama model",
+                                         choices=model_choices
+                            )
+                        ]
                         
-                        try:
-                            # Check if it's a valid index
-                            idx = int(model_choice) - 1
-                            if 0 <= idx < len(models):
-                                ollama_model = models[idx]["name"]
-                            else:
-                                ollama_model = model_choice
-                        except ValueError:
-                            # Not a number, use as a model name
-                            ollama_model = model_choice
+                        model_answer = inquirer.prompt(questions)
+                        if model_answer:
+                            ollama_model = model_answer['model']
+                        else:
+                            ollama_model = models[0]["name"] if models else "llama3"
                     else:
                         print("No models found in Ollama. You may need to pull a model first.")
                         ollama_model = input("Enter Ollama model name (press Enter for default 'llama3'): ").strip() or "llama3"
@@ -105,13 +163,6 @@ async def setup_wizard():
             print("Make sure Ollama is running and accessible.")
             ollama_model = input("Enter Ollama model name (press Enter for default 'llama3'): ").strip() or "llama3"
             
-    else:
-        print("❌ Invalid choice. Using Google Gemini as default.")
-        llm_engine = "gemini"
-        gemini_api_key = input("Enter your Google Gemini API key: ").strip()
-        if not gemini_api_key:
-            print("❌ Gemini API key cannot be empty. Please try again.")
-            return False
     
     # Get the rest of the configuration
     session_name = input("Enter a session name (or press Enter for 'silentgem'): ").strip() or "silentgem"
@@ -136,6 +187,7 @@ async def setup_wizard():
             telegram_api_hash, 
             llm_engine,
             gemini_api_key,
+            gemini_model,
             ollama_url,
             ollama_model,
             session_name,
@@ -162,7 +214,7 @@ async def setup_wizard():
     print("\n🎉 Setup complete! You can now run SilentGem with: python silentgem.py")
     return True
 
-async def save_env_file(api_id, api_hash, llm_engine, gemini_key, ollama_url, ollama_model, session_name, target_language):
+async def save_env_file(api_id, api_hash, llm_engine, gemini_key, gemini_model, ollama_url, ollama_model, session_name, target_language):
     """Save API credentials to .env file"""
     env_content = f"""# Telegram API credentials
 TELEGRAM_API_ID={api_id}
@@ -171,8 +223,9 @@ TELEGRAM_API_HASH={api_hash}
 # LLM Engine selection ("gemini" or "ollama")
 LLM_ENGINE={llm_engine}
 
-# Google Gemini API key (if using gemini)
+# Google Gemini API key and model (if using gemini)
 GEMINI_API_KEY={gemini_key}
+GEMINI_MODEL={gemini_model}
 
 # Ollama settings (if using ollama)
 OLLAMA_URL={ollama_url}
@@ -251,75 +304,81 @@ async def setup_chat_mappings(client):
         username = f" (@{chat['username']})" if chat["username"] else ""
         print(f"{i}. [{chat_type}] {chat['title']}{username} (ID: {chat['id']})")
     
-    # Ask which chats to monitor
-    print("\nNow select which chats you want to monitor for translation")
-    print("Enter the numbers (comma-separated) or 'q' to quit:")
+    # Ask which chats to monitor using interactive checkbox
+    chat_choices = []
+    for chat in available_chats:
+        chat_type = chat["type"]
+        username = f" (@{chat['username']})" if chat["username"] else ""
+        label = f"[{chat_type}] {chat['title']}{username} (ID: {chat['id']})"
+        chat_choices.append((label, chat))
     
-    selection = input("> ").strip()
-    if selection.lower() == 'q':
+    questions = [
+        inquirer.Checkbox('chats',
+                         message="Select chats you want to monitor for translation (use spacebar to select, enter to confirm)",
+                         choices=chat_choices,
+        )
+    ]
+    
+    answers = inquirer.prompt(questions)
+    if not answers or not answers['chats']:
         # Create an empty mapping file
         with open("data/mapping.json", "w") as f:
             json.dump({}, f, indent=2)
         print("\n✅ Created empty mapping file data/mapping.json")
         return
     
-    # Process selection
-    selected_indices = []
-    try:
-        for item in selection.split(","):
-            idx = int(item.strip()) - 1
-            if 0 <= idx < len(available_chats):
-                selected_indices.append(idx)
-    except ValueError:
-        print("Invalid selection, using no chats.")
-        selected_indices = []
-    
-    if not selected_indices:
-        print("No chats selected.")
-        # Create an empty mapping file
-        with open("data/mapping.json", "w") as f:
-            json.dump({}, f, indent=2)
-        print("\n✅ Created empty mapping file data/mapping.json")
-        return
+    selected_chats = answers['chats']
     
     # Create mapping
     mapping = {}
     
-    print("\nFor each selected chat, enter the ID of the channel where translations should be sent")
-    print("You can create a new private channel in Telegram for each source.")
+    print("\n📋 For each selected chat, choose a target channel where translations should be sent")
     
-    for idx in selected_indices:
-        source_chat = available_chats[idx]
-        print(f"\nFor '{source_chat['title']}':")
+    # Get available target channels
+    target_channels = [c for c in available_chats if c["type"] == "channel"]
+    
+    for source_chat in selected_chats:
+        print(f"\n🔹 Setting up: {source_chat['title']}")
         
-        print("Available target channels:")
+        if not target_channels:
+            print("⚠️  No channels available. Please enter channel ID manually:")
+            target_id = input("> ").strip()
+            if target_id:
+                mapping[str(source_chat["id"])] = str(target_id)
+                print(f"✅ Added mapping: '{source_chat['title']}' -> Channel ID {target_id}")
+            continue
         
-        # Display potential target channels (private channels are best)
-        target_channels = [c for c in available_chats if c["type"] == "channel"]
-        for i, chat in enumerate(target_channels, 1):
+        # Create choices for target channels
+        target_choices = []
+        for chat in target_channels:
             username = f" (@{chat['username']})" if chat["username"] else ""
-            print(f"{i}. {chat['title']}{username} (ID: {chat['id']})")
+            label = f"{chat['title']}{username} (ID: {chat['id']})"
+            target_choices.append((label, chat))
         
-        print("\nEnter the number of the target channel, or the channel ID directly:")
-        target_input = input("> ").strip()
+        target_choices.append(("Enter channel ID manually", None))
         
-        # Process target input
-        try:
-            if target_input.isdigit() and 1 <= int(target_input) <= len(target_channels):
-                # User entered a number from the list
-                target_idx = int(target_input) - 1
-                target_chat = target_channels[target_idx]
-                target_id = target_chat["id"]
-            else:
-                # User entered a channel ID directly
-                target_id = target_input
-                
-            # Add to mapping
-            mapping[str(source_chat["id"])] = str(target_id)
-            print(f"✅ Added mapping: '{source_chat['title']}' -> Channel ID {target_id}")
+        questions = [
+            inquirer.List('target',
+                         message=f"Select target channel for '{source_chat['title']}'",
+                         choices=target_choices
+            )
+        ]
+        
+        answer = inquirer.prompt(questions)
+        if not answer:
+            continue
             
-        except (ValueError, IndexError):
-            print(f"❌ Invalid selection for '{source_chat['title']}', skipping.")
+        if answer['target'] is None:
+            # Manual entry
+            target_id = input("Enter channel ID: ").strip()
+            if target_id:
+                mapping[str(source_chat["id"])] = str(target_id)
+                print(f"✅ Added mapping: '{source_chat['title']}' -> Channel ID {target_id}")
+        else:
+            # Selected from list
+            target_chat = answer['target']
+            mapping[str(source_chat["id"])] = str(target_chat["id"])
+            print(f"✅ Added mapping: '{source_chat['title']}' -> {target_chat['title']}")
     
     # Save mapping
     if mapping:

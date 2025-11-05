@@ -3,6 +3,6 @@ SilentGem - A Telegram translator using Pyrogram and Google Gemini.
 Created by Dhillon '@l33tdawg' Kannabhiran (l33tdawg@hitb.org)
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __author__ = "Dhillon '@l33tdawg' Kannabhiran"
 __email__ = "l33tdawg@hitb.org" 

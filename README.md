@@ -21,6 +21,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - Cross-chat contextual analysis for deeper insights (v1.2)
 - Conversational, ChatGPT-like responses to queries (v1.2)
 - ⚡ Ultra-fast performance with 2-3 second response times (v1.2.1)
+- 🎯 Select from available Google Gemini models during setup (v1.3)
 
 ## Requirements
 
@@ -110,9 +111,11 @@ You can easily switch between Gemini and Ollama:
 1. From the command line: `python silentgem.py --config-llm`
 2. From the interactive menu: Select option 6 "Update LLM Settings"
 
-### Using Ollama
+### Choosing Models
 
-When using Ollama, you can:
+**Google Gemini**: During setup or when updating LLM settings, SilentGem fetches and displays all available Gemini models (e.g., gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash-exp). Simply select your preferred model from the list.
+
+**Ollama**: When using Ollama, you can:
 - Specify the URL (default: http://localhost:11434)
 - Choose from models you've already pulled
 - Change models without redoing the entire setup
@@ -273,7 +276,15 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 - **LLM-processed responses**: Intelligent synthesis instead of raw search result lists
 - **Streamlined prompts**: Reduced complexity for faster processing and lower token usage
 
-### Version 1.3 - Advanced Conversational Memory (Coming Soon)
+### ✅ Version 1.3 - Model Selection & Flexibility (COMPLETED)
+
+**Enhanced model configuration and choice:**
+- **Google Gemini model selection**: Choose from all available Gemini models during setup (gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash-exp, etc.)
+- **Dynamic model fetching**: Automatically retrieves current available models from Google's API
+- **Persistent configuration**: Selected model stored in .env for consistent use across sessions
+- **Easy model switching**: Update your Gemini model anytime via `--config-llm` without full reconfiguration
+
+### Version 1.4 - Advanced Conversational Memory (Coming Soon)
 
 Priority features planned for the next release:
 - **Cross-session Conversation Context**: Remember previous interactions across different sessions for even more natural follow-up questions
@@ -282,7 +293,7 @@ Priority features planned for the next release:
 - **Query Templates**: Save and reuse common search patterns
 - **Performance Analytics**: Built-in performance monitoring and optimization suggestions
 
-### Version 1.4 - Proactive Assistant
+### Version 1.5 - Proactive Assistant
 
 Transforming from reactive search to proactive assistant:
 - **Topic Alerts**: Set up notifications for topics you care about
@@ -290,7 +301,7 @@ Transforming from reactive search to proactive assistant:
 - **Bidirectional Communication**: Reply to messages from within the chat insights interface
 - **Topic Collections**: Create and organize collections of related information
 
-### Version 1.5 - Knowledge Organization
+### Version 1.6 - Knowledge Organization
 
 Building a personal knowledge base from your conversations:
 - **Custom Tagging**: Tag and categorize important messages for easy retrieval
@@ -298,7 +309,7 @@ Building a personal knowledge base from your conversations:
 - **Task Extraction**: Identify action items from conversations
 - **Reminder Integration**: Set reminders related to specific discussion topics
 
-### Version 1.6 - Analytics & Visualization
+### Version 1.7 - Analytics & Visualization
 
 Advanced analytical capabilities:
 - **Sentiment Analysis**: Track the emotional tone of discussions

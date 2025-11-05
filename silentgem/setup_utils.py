@@ -421,6 +421,7 @@ async def config_llm_settings():
     # Set defaults to current values
     llm_engine = current_llm_engine
     gemini_api_key = current_gemini_api_key
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
     ollama_url = current_ollama_url
     ollama_model = current_ollama_model
     
@@ -435,6 +436,58 @@ async def config_llm_settings():
             if not gemini_api_key:
                 print("❌ Gemini API key cannot be empty. Using existing key.")
                 gemini_api_key = current_gemini_api_key
+        
+        # Get current Gemini model
+        current_gemini_model = os.getenv("GEMINI_MODEL", "gemini-1.5-pro")
+        gemini_model = current_gemini_model
+        
+        print(f"\nCurrent Gemini Model: {current_gemini_model}")
+        choice = input("Do you want to update the Gemini model? (y/n): ").strip().lower()
+        if choice == 'y':
+            # Fetch available Gemini models
+            print(f"\nFetching available Google Gemini models...")
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=gemini_api_key)
+                
+                # Get list of available models
+                models = genai.list_models()
+                gemini_models = [
+                    model for model in models 
+                    if 'generateContent' in model.supported_generation_methods
+                ]
+                
+                if gemini_models:
+                    print("\nAvailable Gemini models:")
+                    for i, model in enumerate(gemini_models, 1):
+                        model_name = model.name.replace('models/', '')
+                        print(f"{i}. {model_name}")
+                    
+                    print("\nSelect a model by number or enter a name directly (press Enter to keep current):")
+                    model_choice = input("> ").strip()
+                    
+                    if model_choice:
+                        try:
+                            # Check if it's a valid index
+                            idx = int(model_choice) - 1
+                            if 0 <= idx < len(gemini_models):
+                                gemini_model = gemini_models[idx].name.replace('models/', '')
+                            else:
+                                gemini_model = model_choice
+                        except ValueError:
+                            # Not a number, use as a model name
+                            gemini_model = model_choice
+                    
+                    print(f"✅ Selected model: {gemini_model}")
+                else:
+                    print("⚠️  No models found. Keeping current model.")
+                    
+            except ImportError:
+                print("⚠️  google-generativeai package not installed. Keeping current model.")
+                print("Install with: pip install google-generativeai")
+            except Exception as e:
+                print(f"⚠️  Error fetching models: {e}")
+                print("Keeping current model.")
                 
     elif llm_choice == "2" or llm_choice.lower() == "ollama":
         llm_engine = "ollama"
@@ -508,6 +561,7 @@ async def config_llm_settings():
     # Update only LLM-related settings
     existing_env["LLM_ENGINE"] = llm_engine
     existing_env["GEMINI_API_KEY"] = gemini_api_key
+    existing_env["GEMINI_MODEL"] = gemini_model
     existing_env["OLLAMA_URL"] = ollama_url
     existing_env["OLLAMA_MODEL"] = ollama_model
     
