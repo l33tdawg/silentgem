@@ -224,6 +224,7 @@ class CommandHandler:
 
             # Process query with simplified interpretation for speed
             interpretation = None
+            enhanced_query = query
             try:
                 if self.fast_mode:
                     # Fast mode: minimal query processing
@@ -235,25 +236,19 @@ class CommandHandler:
                     )
                 else:
                     # Full processing with LLM
-                    if is_followup:
-                        # Check if this is a place-related query
-                        place_indicators = ["cities", "places", "towns", "locations", "areas", "regions"]
-                        is_place_query = any(indicator in query.lower() for indicator in place_indicators)
-                        
-                        if is_place_query:
-                            # For place queries, try to enhance the query with context
-                            enhanced_query = query
-                            
-                            # If previous query was about a specific location/event, add it to the query
-                            location_context = self._extract_location_context(previous_query)
-                            if location_context:
-                                # Format: "Make a list of cities in [location_context]"
-                                enhanced_query = f"{query} in {location_context}"
-                                logger.info(f"Enhanced place query with context: '{enhanced_query}'")
-                                query = enhanced_query
+                    if is_followup and previous_query:
+                        # Enhance the query with conversation context BEFORE searching
+                        enhanced_query = await self._enhance_query_with_context(
+                            query, 
+                            previous_query,
+                            conversation_history_dicts,
+                            entities,
+                            topics
+                        )
+                        logger.info(f"Enhanced follow-up query: '{query}' -> '{enhanced_query}'")
                     
                     # Call the processor with the potentially enhanced query
-                    interpretation = await self.query_processor.process_query(query)
+                    interpretation = await self.query_processor.process_query(enhanced_query)
             except Exception as e:
                 logger.warning(f"Error processing query with NLU: {e}")
                 # Create minimal interpretation

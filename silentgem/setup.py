@@ -6,7 +6,9 @@ import os
 import json
 import asyncio
 import httpx
-import inquirer
+import questionary
+from questionary import Choice, Style as QuestionaryStyle
+from colorama import Fore, Style, init
 from pathlib import Path
 from getpass import getpass
 from pyrogram import Client, errors
@@ -15,13 +17,32 @@ from dotenv import load_dotenv
 
 from silentgem.utils import ensure_dir_exists
 
+# Initialize colorama
+init(autoreset=True)
+
+# Custom questionary style - works on both light and dark backgrounds
+custom_style = QuestionaryStyle([
+    ('qmark', 'fg:#0087ff bold'),
+    ('question', 'bold'),
+    ('answer', 'fg:#00af00 bold'),
+    ('pointer', 'fg:#0087ff bold'),
+    ('highlighted', 'fg:#0087ff bold'),
+    ('selected', 'fg:#00af00'),
+    ('separator', 'fg:#767676'),
+    ('instruction', 'fg:#767676'),
+    ('text', ''),
+    ('disabled', 'fg:#767676 italic')
+])
+
 async def setup_wizard():
     """
     Run the interactive setup wizard to configure SilentGem
     """
-    print("\n=== SilentGem Setup Wizard ===\n")
+    print(f"\n{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}✨ SilentGem Setup Wizard ✨{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}\n")
     print("This wizard will help you set up SilentGem with your Telegram account and translation API.")
-    print("You'll need to provide your Telegram API credentials from https://my.telegram.org/apps")
+    print(f"{Fore.CYAN}📝 Get your credentials from: {Fore.WHITE}https://my.telegram.org/apps{Style.RESET_ALL}\n")
     
     # Ensure necessary directories exist
     ensure_dir_exists("data")
@@ -41,24 +62,21 @@ async def setup_wizard():
         print("❌ API Hash cannot be empty. Please try again.")
         return False
     
-    # LLM Engine selection using inquirer
-    questions = [
-        inquirer.List('llm_engine',
-                     message="Select which translation engine to use",
-                     choices=[
-                         ('Google Gemini (cloud-based)', 'gemini'),
-                         ('Ollama (local)', 'ollama')
-                     ],
-                     default='gemini'
-        )
-    ]
+    # LLM Engine selection
+    print(f"\n{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
+    llm_engine = await questionary.select(
+        "Select which translation engine to use:",
+        choices=[
+            Choice("🌐  Google Gemini (cloud-based)", value='gemini'),
+            Choice("💻  Ollama (local)", value='ollama')
+        ],
+        style=custom_style
+    ).ask_async()
+    print(f"{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
     
-    answers = inquirer.prompt(questions)
-    if not answers:
+    if not llm_engine:
         print("❌ Setup cancelled.")
         return False
-        
-    llm_engine = answers['llm_engine']
     gemini_api_key = ""
     ollama_url = "http://localhost:11434"
     ollama_model = "llama3"
@@ -86,23 +104,16 @@ async def setup_wizard():
             ]
             
             if gemini_models:
-                model_choices = [(model.name.replace('models/', ''), model.name.replace('models/', '')) 
-                                for model in gemini_models]
+                choices = [Choice("gemini-1.5-pro (recommended)", value="gemini-1.5-pro")]
+                choices.extend([Choice(model.name.replace('models/', ''), value=model.name.replace('models/', '')) for model in gemini_models])
                 
-                # Add a default option at the top
-                model_choices.insert(0, ('gemini-1.5-pro (recommended)', 'gemini-1.5-pro'))
+                gemini_model = await questionary.select(
+                    "Select a Gemini model:",
+                    choices=choices,
+                    style=custom_style
+                ).ask_async()
                 
-                questions = [
-                    inquirer.List('model',
-                                 message="Select a Gemini model",
-                                 choices=model_choices,
-                                 default='gemini-1.5-pro'
-                    )
-                ]
-                
-                model_answer = inquirer.prompt(questions)
-                if model_answer:
-                    gemini_model = model_answer['model']
+                if gemini_model:
                     print(f"✅ Selected model: {gemini_model}")
                 else:
                     gemini_model = "gemini-1.5-pro"
@@ -135,21 +146,19 @@ async def setup_wizard():
                 if response.status_code == 200:
                     models = response.json().get("models", [])
                     if models:
-                        model_choices = [(f"{model.get('name', 'unknown')} ({model.get('size', 0) // (1024 * 1024)} MB)", 
-                                        model.get('name', 'unknown')) 
-                                       for model in models]
-                        
-                        questions = [
-                            inquirer.List('model',
-                                         message="Select an Ollama model",
-                                         choices=model_choices
-                            )
+                        choices = [
+                            Choice(f"{model.get('name', 'unknown')} ({model.get('size', 0) // (1024 * 1024)} MB)", 
+                                  value=model.get('name', 'unknown'))
+                            for model in models
                         ]
                         
-                        model_answer = inquirer.prompt(questions)
-                        if model_answer:
-                            ollama_model = model_answer['model']
-                        else:
+                        ollama_model = await questionary.select(
+                            "Select an Ollama model:",
+                            choices=choices,
+                            style=custom_style
+                        ).ask_async()
+                        
+                        if not ollama_model:
                             ollama_model = models[0]["name"] if models else "llama3"
                     else:
                         print("No models found in Ollama. You may need to pull a model first.")
@@ -210,8 +219,12 @@ async def setup_wizard():
     if not os.path.exists(".env"):
         print("\n❌ Failed to create .env file.")
         return False
-        
-    print("\n🎉 Setup complete! You can now run SilentGem with: python silentgem.py")
+    
+    # Success banner
+    print(f"\n{Fore.GREEN}{'═' * 60}{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}✅ Setup Complete!{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}{'═' * 60}{Style.RESET_ALL}")
+    print(f"\n{Fore.CYAN}You can now run SilentGem with:{Style.RESET_ALL} {Fore.WHITE}python silentgem.py{Style.RESET_ALL}\n")
     return True
 
 async def save_env_file(api_id, api_hash, llm_engine, gemini_key, gemini_model, ollama_url, ollama_model, session_name, target_language):
@@ -304,30 +317,28 @@ async def setup_chat_mappings(client):
         username = f" (@{chat['username']})" if chat["username"] else ""
         print(f"{i}. [{chat_type}] {chat['title']}{username} (ID: {chat['id']})")
     
-    # Ask which chats to monitor using interactive checkbox
-    chat_choices = []
+    # Ask which chats to monitor using checkbox
+    choices = []
     for chat in available_chats:
         chat_type = chat["type"]
         username = f" (@{chat['username']})" if chat["username"] else ""
         label = f"[{chat_type}] {chat['title']}{username} (ID: {chat['id']})"
-        chat_choices.append((label, chat))
+        choices.append(Choice(label, value=chat))
     
-    questions = [
-        inquirer.Checkbox('chats',
-                         message="Select chats you want to monitor for translation (use spacebar to select, enter to confirm)",
-                         choices=chat_choices,
-        )
-    ]
+    print(f"\n{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
+    selected_chats = await questionary.checkbox(
+        "Select chats to monitor for translation (SPACE to select, ENTER when done):",
+        choices=choices,
+        style=custom_style
+    ).ask_async()
+    print(f"{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
     
-    answers = inquirer.prompt(questions)
-    if not answers or not answers['chats']:
+    if not selected_chats:
         # Create an empty mapping file
         with open("data/mapping.json", "w") as f:
             json.dump({}, f, indent=2)
         print("\n✅ Created empty mapping file data/mapping.json")
         return
-    
-    selected_chats = answers['chats']
     
     # Create mapping
     mapping = {}
@@ -349,26 +360,24 @@ async def setup_chat_mappings(client):
             continue
         
         # Create choices for target channels
-        target_choices = []
+        choices = []
         for chat in target_channels:
             username = f" (@{chat['username']})" if chat["username"] else ""
             label = f"{chat['title']}{username} (ID: {chat['id']})"
-            target_choices.append((label, chat))
+            choices.append(Choice(label, value=chat))
         
-        target_choices.append(("Enter channel ID manually", None))
+        choices.append(Choice("Enter channel ID manually", value=None))
         
-        questions = [
-            inquirer.List('target',
-                         message=f"Select target channel for '{source_chat['title']}'",
-                         choices=target_choices
-            )
-        ]
+        target_chat = await questionary.select(
+            f"Select target channel for '{source_chat['title']}':",
+            choices=choices,
+            style=custom_style
+        ).ask_async()
         
-        answer = inquirer.prompt(questions)
-        if not answer:
+        if target_chat is False:  # User cancelled
             continue
             
-        if answer['target'] is None:
+        if target_chat is None:
             # Manual entry
             target_id = input("Enter channel ID: ").strip()
             if target_id:
@@ -376,7 +385,6 @@ async def setup_chat_mappings(client):
                 print(f"✅ Added mapping: '{source_chat['title']}' -> Channel ID {target_id}")
         else:
             # Selected from list
-            target_chat = answer['target']
             mapping[str(source_chat["id"])] = str(target_chat["id"])
             print(f"✅ Added mapping: '{source_chat['title']}' -> {target_chat['title']}")
     
@@ -396,7 +404,9 @@ async def config_llm_settings():
     """
     Configure only the LLM-related settings without changing other settings
     """
-    print("\n=== SilentGem LLM Configuration ===\n")
+    print(f"\n{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}🤖 SilentGem LLM Configuration{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}\n")
     print("This utility will help you update your LLM engine settings without changing other configuration.")
     
     # Load current configuration
@@ -416,49 +426,54 @@ async def config_llm_settings():
         print(f"Ollama Model: {current_ollama_model}")
     
     # LLM Engine selection
-    print("\nSelect which translation engine to use:")
-    print("1. Google Gemini (cloud-based)")
-    print("2. Ollama (local)")
-    print("q. Quit without changing")
+    print(f"\n{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
+    llm_engine = await questionary.select(
+        "Select which translation engine to use:",
+        choices=[
+            Choice('🌐  Google Gemini (cloud-based)', value='gemini'),
+            Choice('💻  Ollama (local)', value='ollama'),
+            Choice('❌  Quit without changing', value='quit')
+        ],
+        default=current_llm_engine,
+        style=custom_style
+    ).ask_async()
+    print(f"{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}")
     
-    llm_choice = input(f"Enter your choice (default: {current_llm_engine}): ").strip()
-    
-    if llm_choice.lower() == 'q':
+    if not llm_engine or llm_engine == 'quit':
         print("Exiting without changes.")
         return True
     
     # Set defaults to current values
-    llm_engine = current_llm_engine
     gemini_api_key = current_gemini_api_key
     ollama_url = current_ollama_url
     ollama_model = current_ollama_model
     
     # Update based on selection
-    if llm_choice == "1" or llm_choice.lower() == "gemini":
+    if llm_engine == "gemini":
         llm_engine = "gemini"
         current_key_hidden = current_gemini_api_key[:4] + '*' * 12 if current_gemini_api_key else "Not set"
         print(f"\nCurrent Gemini API Key: {current_key_hidden}")
-        choice = input("Do you want to update the API key? (y/n): ").strip().lower()
-        if choice == 'y':
+        
+        if await questionary.confirm("Do you want to update the API key?", default=False, style=custom_style).ask_async():
             gemini_api_key = input("Enter your Google Gemini API key: ").strip()
             if not gemini_api_key:
                 print("❌ Gemini API key cannot be empty. Using existing key.")
                 gemini_api_key = current_gemini_api_key
                 
-    elif llm_choice == "2" or llm_choice.lower() == "ollama":
+    elif llm_engine == "ollama":
         llm_engine = "ollama"
         
         # Ollama URL
         print(f"\nCurrent Ollama URL: {current_ollama_url}")
-        choice = input("Do you want to update the Ollama URL? (y/n): ").strip().lower()
-        if choice == 'y':
+        
+        if await questionary.confirm("Do you want to update the Ollama URL?", default=False, style=custom_style).ask_async():
             new_url = input("Enter Ollama API URL (press Enter for default 'http://localhost:11434'): ").strip()
             ollama_url = new_url if new_url else "http://localhost:11434"
         
         # Ollama Model
-        print(f"Current Ollama Model: {current_ollama_model}")
-        choice = input("Do you want to update the Ollama model? (y/n): ").strip().lower()
-        if choice == 'y':
+        print(f"\nCurrent Ollama Model: {current_ollama_model}")
+        
+        if await questionary.confirm("Do you want to update the Ollama model?", default=False, style=custom_style).ask_async():
             # Try to connect to Ollama to list available models
             print(f"\nConnecting to Ollama at {ollama_url} to get available models...")
             try:
@@ -468,25 +483,23 @@ async def config_llm_settings():
                     if response.status_code == 200:
                         models = response.json().get("models", [])
                         if models:
-                            print("\nAvailable models:")
-                            for i, model in enumerate(models, 1):
-                                model_name = model.get("name", "unknown")
-                                model_size = model.get("size", 0) // (1024 * 1024)  # Convert to MB
-                                print(f"{i}. {model_name} ({model_size} MB)")
+                            choices = [
+                                Choice(f"{model.get('name', 'unknown')} ({model.get('size', 0) // (1024 * 1024)} MB)", 
+                                      value=model.get('name', 'unknown'))
+                                for model in models
+                            ]
                             
-                            print("\nSelect a model by number or enter a name directly:")
-                            model_choice = input("> ").strip()
+                            default_model = current_ollama_model if any(m.get('name') == current_ollama_model for m in models) else None
                             
-                            try:
-                                # Check if it's a valid index
-                                idx = int(model_choice) - 1
-                                if 0 <= idx < len(models):
-                                    ollama_model = models[idx]["name"]
-                                else:
-                                    ollama_model = model_choice
-                            except ValueError:
-                                # Not a number, use as a model name
-                                ollama_model = model_choice
+                            selected_model = await questionary.select(
+                                "Select an Ollama model:",
+                                choices=choices,
+                                default=default_model,
+                                style=custom_style
+                            ).ask_async()
+                            
+                            if selected_model:
+                                ollama_model = selected_model
                         else:
                             print("No models found in Ollama. You may need to pull a model first.")
                             new_model = input(f"Enter Ollama model name (current: {current_ollama_model}): ").strip()
@@ -535,7 +548,9 @@ async def config_target_language():
     """
     Update only the target language setting
     """
-    print("\n=== Update Target Language ===\n")
+    print(f"\n{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}🌍 Update Target Language{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}\n")
     
     # Load current configuration
     load_dotenv()

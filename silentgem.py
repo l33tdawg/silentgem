@@ -18,7 +18,13 @@ import traceback
 from pathlib import Path
 from loguru import logger
 import threading
-from colorama import Fore, Style
+from colorama import Fore, Style, init
+import questionary
+from questionary import Choice, Style as QuestionaryStyle
+from prompt_toolkit.styles import Style as PTStyle
+
+# Initialize colorama
+init(autoreset=True)
 
 from silentgem.config import validate_config, MAPPING_FILE, API_ID, API_HASH, GEMINI_API_KEY, SESSION_NAME, DATA_DIR, LOG_LEVEL
 from silentgem.client import SilentGemClient, get_client
@@ -47,16 +53,30 @@ ensure_dir_exists("data")
 ensure_dir_exists("logs")
 
 # ASCII art for startup
-SILENTGEM_ASCII = """
-███████╗██╗██╗     ███████╗███╗   ██╗████████╗ ██████╗ ███████╗███╗   ███╗
+SILENTGEM_ASCII = f"""
+{Fore.CYAN}███████╗██╗██╗     ███████╗███╗   ██╗████████╗ ██████╗ ███████╗███╗   ███╗
 ██╔════╝██║██║     ██╔════╝████╗  ██║╚══██╔══╝██╔════╝ ██╔════╝████╗ ████║
 ███████╗██║██║     █████╗  ██╔██╗ ██║   ██║   ██║  ███╗█████╗  ██╔████╔██║
 ╚════██║██║██║     ██╔══╝  ██║╚██╗██║   ██║   ██║   ██║██╔══╝  ██║╚██╔╝██║
 ███████║██║███████╗███████╗██║ ╚████║   ██║   ╚██████╔╝███████╗██║ ╚═╝ ██║
-╚══════╝╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚══════╝╚═╝     ╚═╝
+╚══════╝╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚══════╝╚═╝     ╚═╝{Style.RESET_ALL}
 
-        🔄 Telegram Translator using Google Gemini Flash Thinking 🔄
+        {Fore.YELLOW}✨ Telegram Translator with AI-Powered Insights ✨{Style.RESET_ALL}
 """
+
+# Custom questionary style - works on both light and dark backgrounds
+custom_style = QuestionaryStyle([
+    ('qmark', 'fg:#0087ff bold'),           # Question mark - bright blue
+    ('question', 'bold'),                    # Question text - bold default color
+    ('answer', 'fg:#00af00 bold'),          # Selected answer - green
+    ('pointer', 'fg:#0087ff bold'),         # Selection pointer - bright blue
+    ('highlighted', 'fg:#0087ff bold'),     # Highlighted choice - bright blue
+    ('selected', 'fg:#00af00'),             # Selected items in checkbox - green
+    ('separator', 'fg:#767676'),            # Separators - gray
+    ('instruction', 'fg:#767676'),          # Instructions - gray
+    ('text', ''),                           # Normal text - use terminal default
+    ('disabled', 'fg:#767676 italic')       # Disabled - gray italic
+])
 
 def print_debug(*args, **kwargs):
     """Print only if debug mode is enabled"""
@@ -1252,21 +1272,37 @@ async def interactive_mode():
     
     while True:
         try:
-            print("\n==== SilentGem Main Menu ====")
-            print("1. Start Translation Service")
-            print("2. List Current Mappings")
-            print("3. List Available Chats & Channels")
-            print("4. Remove Mapping")
-            print("5. Run Setup Wizard")
-            print("6. Update LLM Settings")
-            print("7. Update Target Language")
-            print("8. Chat Insights Settings")
-            print("9. Exit")
-            print("============================")
+            print(f"\n{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}")
+            print(f"  {Fore.YELLOW}✨ SilentGem Main Menu ✨{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'═' * 60}{Style.RESET_ALL}\n")
             
-            choice = input("Enter your choice (1-9): ").strip()
+            choice = await questionary.select(
+                "Select an option:",
+                choices=[
+                    Choice("🚀  Start Translation Service", value=1),
+                    Choice("📋  List Current Mappings", value=2),
+                    Choice("💬  List Available Chats & Channels", value=3),
+                    Choice("🗑️   Remove Mapping", value=4),
+                    questionary.Separator("─── Configuration ───"),
+                    Choice("⚙️   Run Setup Wizard", value=5),
+                    Choice("🤖  Update LLM Settings", value=6),
+                    Choice("🌍  Update Target Language", value=7),
+                    Choice("💡  Chat Insights Settings", value=8),
+                    questionary.Separator("─────────────────────"),
+                    Choice("❌  Exit", value=9),
+                ],
+                style=custom_style,
+                use_shortcuts=True
+            ).ask_async()
             
-            if choice == '1':
+            print(f"{Fore.CYAN}{'─' * 60}{Style.RESET_ALL}\n")
+            
+            # User cancelled (Ctrl+C or ESC)
+            if not choice:
+                print("\nExiting SilentGem. Goodbye!")
+                break
+            
+            if choice == 1:
                 print("\n[INFO] Starting translation service. Press Ctrl+C to exit.")
                 
                 # Just exit the program when the service exits
@@ -1274,29 +1310,23 @@ async def interactive_mode():
                 await start_service()
                 # start_service will exit the program, so we won't get here
                 
-            elif choice == '2':
+            elif choice == 2:
                 await list_mappings()
-            elif choice == '3':
+            elif choice == 3:
                 await list_available_chats()
-            elif choice == '4':
+            elif choice == 4:
                 await interactive_remove_mapping()
-            elif choice == '5':
-                # Use the imported setup_wizard directly
+            elif choice == 5:
                 await setup_wizard()
-            elif choice == '6':
-                # Use the imported config_llm_settings directly
+            elif choice == 6:
                 await config_llm_settings()
-            elif choice == '7':
-                # Use the imported config_target_language directly
+            elif choice == 7:
                 await config_target_language()
-            elif choice == '8':
-                # Chat Insights settings
+            elif choice == 8:
                 await setup_insights()
-            elif choice == '9':
-                print("Exiting SilentGem. Goodbye!")
+            elif choice == 9:
+                print("\nExiting SilentGem. Goodbye!")
                 break
-            else:
-                print("❌ Invalid choice. Please try again.")
                 
             # Small pause before showing menu again
             await asyncio.sleep(0.2)

@@ -22,6 +22,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - Conversational, ChatGPT-like responses to queries (v1.2)
 - ⚡ Ultra-fast performance with 2-3 second response times (v1.2.1)
 - 🎯 Select from available Google Gemini models during setup (v1.3)
+- 🎨 Interactive terminal menus with arrow-key navigation (v1.4)
 
 ## Requirements
 
@@ -284,7 +285,15 @@ SilentGem is continuously improving with a focus on making Chat Insights a power
 - **Persistent configuration**: Selected model stored in .env for consistent use across sessions
 - **Easy model switching**: Update your Gemini model anytime via `--config-llm` without full reconfiguration
 
-### Version 1.4 - Advanced Conversational Memory (Coming Soon)
+### ✅ Version 1.4 - Interactive Terminal Menus (COMPLETED)
+
+**Modern CLI interface:**
+- **Arrow-key navigation**: Navigate all menus with ↑↓ keys
+- **Multi-select with checkboxes**: Use SPACE to select multiple chats
+- **Visual feedback**: See your current selection highlighted
+- **Better UX**: No more typing numbers or making typos
+
+### Version 1.5 - Advanced Conversational Memory (Coming Soon)
 
 Priority features planned for the next release:
 - **Cross-session Conversation Context**: Remember previous interactions across different sessions for even more natural follow-up questions
@@ -293,7 +302,7 @@ Priority features planned for the next release:
 - **Query Templates**: Save and reuse common search patterns
 - **Performance Analytics**: Built-in performance monitoring and optimization suggestions
 
-### Version 1.5 - Proactive Assistant
+### Version 1.6 - Proactive Assistant
 
 Transforming from reactive search to proactive assistant:
 - **Topic Alerts**: Set up notifications for topics you care about
@@ -301,7 +310,7 @@ Transforming from reactive search to proactive assistant:
 - **Bidirectional Communication**: Reply to messages from within the chat insights interface
 - **Topic Collections**: Create and organize collections of related information
 
-### Version 1.6 - Knowledge Organization
+### Version 1.7 - Knowledge Organization
 
 Building a personal knowledge base from your conversations:
 - **Custom Tagging**: Tag and categorize important messages for easy retrieval
@@ -309,7 +318,7 @@ Building a personal knowledge base from your conversations:
 - **Task Extraction**: Identify action items from conversations
 - **Reminder Integration**: Set reminders related to specific discussion topics
 
-### Version 1.7 - Analytics & Visualization
+### Version 1.8 - Analytics & Visualization
 
 Advanced analytical capabilities:
 - **Sentiment Analysis**: Track the emotional tone of discussions
