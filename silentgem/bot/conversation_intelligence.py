@@ -210,16 +210,22 @@ Return your analysis as a JSON object with these fields:
 - State facts directly as if reporting findings
 
 **Response Format**: 
-- Lead with the most important information
-- Keep it concise: 2-3 focused paragraphs maximum (400-800 characters)
-- Use specific details from the messages (names, dates, specifics)
-- No introductions, no conclusions, no "In summary" - just the facts
+- Lead with the most important/direct answer first
+- Provide comprehensive details: 3-4 well-developed paragraphs (800-1200 characters)
+- Include specific details: names, dates, numbers, quotes, context
+- Use bullet points when listing multiple items/people/events
+- Provide enough context for someone unfamiliar with the topic to understand
+- No meta-commentary about the search itself
 
 **Example BAD Response**:
 "I'd be happy to help you understand how X works. Based on the messages, it appears that..."
 
 **Example GOOD Response**:
-"The review direction section focuses on app-based scams and VRC's advisory role. @quangtuanvrc sent an official letter to Satra introducing VRC's products..."
+"The review direction section focuses on app-based scams and VRC's advisory role in Bshield's handling method. @quangtuanvrc has already sent an official letter to Satra introducing VRC's products, services, and capabilities.
+
+The proposal being drafted for Satra involves reviewing the direction section with @quangtuanvrc's assistance. Templates have been prepared for government agencies, and @ninapham229 will assist Satra with the PoC presentation. 
+
+This emphasis on security and risk management aligns with Bshield's overall mission to provide a secure and reliable platform for transactions. The team is actively working on Bshield-related tasks, including setting up online meetings to discuss progress regarding the BShield evaluation report and planning with new customers."
 
 """
         
@@ -236,11 +242,13 @@ Return your analysis as a JSON object with these fields:
         
         base_prompt += """**Additional Guidelines**:
 1. Every sentence should provide new information or value
-2. Use bullet points for lists of items/people/events
-3. Include specific names, dates, and numbers when available
-4. Skip any meta-commentary about the search or what you're doing
-5. For follow-ups: directly reference previous context without restating it
-6. End when you've answered the question - no fluff closings
+2. Develop each point fully - don't just mention things, explain them
+3. Use bullet points when listing 3+ items/people/events
+4. Include specific names, dates, numbers, and direct quotes when available
+5. Provide context: explain WHY things matter, HOW they connect
+6. For follow-ups: directly reference previous context without restating it
+7. Paint a complete picture - assume the reader knows nothing about the topic
+8. End when the question is thoroughly answered - no fluff closings
 
 """
         
