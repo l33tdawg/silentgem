@@ -126,10 +126,12 @@ class GuidedQueryGenerator:
 **Critical Requirements for Questions**:
 1. Be SHORT and DIRECT (max 10-12 words)
 2. Start with action words: "What", "Who", "When", "How", "Which"
-3. Include SPECIFIC details from the conversation (names, projects, events, documents)
-4. Focus on CONTENT, not meta-information (channels, message counts, contributors)
-5. Each question should reveal NEW substantive information
-6. Ask about topics, events, people, timelines, outcomes - NOT about channels or technical details
+3. MUST reference SPECIFIC things mentioned in the response we just gave to the user
+4. Build naturally on the current conversation - ask about details, next steps, or related aspects
+5. Include SPECIFIC details from the response (names, projects, events, documents, numbers)
+6. Focus on CONTENT, not meta-information (channels, message counts, contributors)
+7. Each question should help the user dig deeper into what they're currently exploring
+8. Ask about topics, events, people, timelines, outcomes - NOT about channels or technical details
 
 **Example BAD Questions** (too generic or meta-focused):
 ❌ "Tell me more about Channel -1002339138388"
@@ -190,31 +192,37 @@ Always respond with valid JSON following the exact schema provided."""
         # Build the comprehensive prompt
         prompt = f"""Analyze this search conversation and suggest relevant follow-up questions.
 
-## Context
+## Current Conversation Context (MOST IMPORTANT)
 
-**User's Query:** "{query}"
+**User Just Asked:** "{query}"
 
-**Search Results:**
-- Found {total_messages} messages across {len(channels)} channel(s)
-- Channels: {', '.join(channels) if channels else 'N/A'}
+**We Just Responded With:**
+{response_text[:1200] if response_text else 'N/A'}...
 
-**Topics Discovered:**
-{topics_text}
+👆 FOCUS YOUR QUESTIONS ON THE SPECIFIC DETAILS IN THIS RESPONSE
 
 **Recent Conversation History:**
 {conversation_text}
 
-**Response Provided to User:**
-{response_text[:600] if response_text else 'N/A'}...
+## Additional Context
+
+**Topics Discovered:**
+{topics_text}
+
+**Search Stats:**
+- Found {total_messages} messages across {len(channels)} channel(s)
 
 ## Your Task
 
-Generate 3 DIRECT, SPECIFIC follow-up questions (10-12 words max each):
-1. **Deep Dive**: Ask about specific details mentioned (timelines, people, deliverables)
-2. **Cross-Reference**: Compare specific entities/events (e.g., "How does X compare to Y?")
-3. **Next Steps**: Ask about concrete actions or outcomes (e.g., "What's the deadline for X?")
+Generate 3 DIRECT, SPECIFIC follow-up questions (10-12 words max each) that:
+1. **Build on what was JUST discussed** in the response above
+2. **Deep Dive**: Ask about specific details mentioned in the response (timelines, people, deliverables)
+3. **Explore Related**: Ask about related aspects mentioned but not fully explained
+4. **Next Steps**: Ask about concrete actions or outcomes referenced
 
-**Question Formula**: [What/Who/When/How/Which] + [Specific Detail from Messages] + [Action/Outcome]?
+**Question Formula**: [What/Who/When/How/Which] + [Specific Detail from Response] + [Action/Outcome]?
+
+**Key Rule**: Questions MUST reference specific things mentioned in the response we just gave, NOT generic topics.
 
 Also identify:
 - Which topics have enough content to warrant expansion (≥8 messages)
@@ -225,19 +233,19 @@ Also identify:
 {{
   "follow_up_questions": [
     {{
-      "question": "What's the deadline for Satra's PoC presentation?",
-      "reasoning": "Timeline details are crucial for project planning",
+      "question": "What was the conversion rate mentioned in the response?",
+      "reasoning": "Response mentioned conversion rate but didn't specify the number",
       "category": "deep_dive"
     }},
     {{
-      "question": "Who besides @quangtuanvrc is working on the proposal?",
-      "reasoning": "Identify all team members involved",
+      "question": "Who else is working with [person mentioned in response]?",
+      "reasoning": "Response mentioned this person - user might want to know collaborators",
       "category": "people"
     }},
     {{
-      "question": "Which government agencies received the templates?",
-      "reasoning": "Understand scope of outreach efforts",
-      "category": "cross_reference"
+      "question": "When is the [event from response] scheduled?",
+      "reasoning": "Response mentioned this event - timeline would be helpful",
+      "category": "timeline"
     }}
   ],
   "expandable_topics": [
@@ -269,17 +277,24 @@ IMPORTANT RULES:
 - Only suggest expandable topics that have substantial content (≥8 messages)
 - Questions should be immediately answerable from the chat history
 
-**Examples of what to focus on**:
-✅ Events: "What was the outcome of the Spring New Product Launch Event?"
-✅ Documents: "What are the key points in the Q2 Work Plan?"
-✅ People: "What role does Phuong Verichains have in the Business Plan?"
-✅ Timelines: "When is the PoC presentation scheduled?"
-✅ Metrics: "What was the conversion rate mentioned?"
+**Examples of context-aware follow-ups**:
+If response mentions "Spring New Product Launch Event attracted 500 customers":
+✅ "What was the conversion rate for the Spring New Product Launch Event?"
+✅ "When did the Spring New Product Launch Event take place?"
+
+If response mentions "Business Plan is being developed by Phuong Verichains":
+✅ "What is the timeline for Phuong Verichains' Business Plan?"
+✅ "Who else is working with Phuong Verichains on the Business Plan?"
+
+If response mentions "Q2 Work Plan includes new initiatives":
+✅ "What specific initiatives are in the Q2 Work Plan?"
+✅ "When does the Q2 Work Plan start?"
 
 **What to avoid**:
+❌ Generic questions not tied to the response: "What else is happening?"
 ❌ Channel references: "Tell me more about Channel -1002339138388"
 ❌ Meta questions: "How do different channels discuss this?"
-❌ Contributor questions: "Who are the main contributors?"
+❌ Questions about things NOT mentioned in the response
 """
         
         return prompt
