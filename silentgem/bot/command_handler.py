@@ -525,24 +525,16 @@ class CommandHandler:
             for msg in messages
         ))
         
-        # Group by topics (simple keyword-based for now)
-        topics_found = {}
-        # You could enhance this with actual topic extraction later
-        # For now, just group by channel
-        for channel in channels:
-            channel_messages = [msg for msg in messages if (msg.get('source_chat_id') or msg.get('target_chat_id')) == channel]
-            if channel_messages:
-                topics_found[f"Channel {channel}"] = {
-                    'count': len(channel_messages),
-                    'messages': channel_messages
-                }
+        # Extract semantic topics from message content
+        topics_found = self._extract_semantic_topics(messages, query)
         
         return {
             'total_messages': len(messages),
             'channels': channels,
             'topics_found': topics_found,
             'date_range': self._get_date_range(messages),
-            'top_contributors': self._get_top_contributors(messages)
+            'top_contributors': self._get_top_contributors(messages),
+            'channel_titles': self._get_channel_titles(messages)
         }
     
     def _get_date_range(self, messages: List[Dict]) -> str:
@@ -578,6 +570,111 @@ class CommandHandler:
         except Exception as e:
             logger.warning(f"Error getting top contributors: {e}")
             return []
+    
+    def _extract_semantic_topics(self, messages: List[Dict], query: str) -> Dict[str, Any]:
+        """Extract meaningful topics from message content using keyword analysis"""
+        if not messages:
+            return {}
+        
+        import re
+        from collections import Counter
+        
+        # Common business keywords that indicate topics
+        topic_patterns = {
+            # Project/Product names (capitalized words, acronyms)
+            'projects': r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b',
+            # Events (words with "Event", "Meeting", "Launch", etc.)
+            'events': r'\b\w+\s+(?:Event|Meeting|Launch|Conference|Summit|Presentation)\b',
+            # Plans/Reports (Q1, Q2, Work Plan, Summary, Report, etc.)
+            'plans': r'\b(?:Q[1-4]|[A-Z]+\s+)?(?:Work\s+Plan|Summary|Report|Proposal|Strategy|Business\s+Plan)\b',
+            # People (@ mentions and full names)
+            'people': r'@\w+|(?:[A-Z][a-z]+\s+[A-Z][a-z]+)',
+            # Metrics/Numbers (percentages, rates, numbers with context)
+            'metrics': r'\b\d+%|\b\d+\s+(?:customers|users|rate|percentage|conversion)\b'
+        }
+        
+        topics_found = {}
+        all_content = ' '.join([msg.get('content', '') or msg.get('text', '') for msg in messages[:20]])  # Limit to avoid too much processing
+        
+        # Extract capitalized phrases (likely to be names/titles)
+        capitalized_phrases = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b', all_content)
+        phrase_counter = Counter(capitalized_phrases)
+        
+        # Find significant phrases (mentioned more than once or longer than 2 words)
+        for phrase, count in phrase_counter.most_common(10):
+            if count >= 2 or len(phrase.split()) >= 2:
+                # Get messages mentioning this phrase
+                related_messages = [
+                    msg for msg in messages 
+                    if phrase.lower() in (msg.get('content', '') or msg.get('text', '')).lower()
+                ]
+                if related_messages:
+                    topics_found[phrase] = {
+                        'count': len(related_messages),
+                        'messages': related_messages[:5],  # Limit to top 5
+                        'type': 'named_entity'
+                    }
+        
+        # Extract event names (anything with "Event", "Launch", "Meeting", etc.)
+        events = re.findall(r'[\w\s]+\s+(?:Event|Launch|Meeting|Conference|Presentation)', all_content, re.IGNORECASE)
+        for event in set(events):
+            event_clean = event.strip()
+            if len(event_clean) > 5:  # Filter out very short matches
+                related_messages = [
+                    msg for msg in messages 
+                    if event_clean.lower() in (msg.get('content', '') or msg.get('text', '')).lower()
+                ]
+                if related_messages and event_clean not in topics_found:
+                    topics_found[event_clean] = {
+                        'count': len(related_messages),
+                        'messages': related_messages[:5],
+                        'type': 'event'
+                    }
+        
+        # Extract plan/report names
+        plans = re.findall(r'(?:Q[1-4]|[A-Z]+\s+)?(?:Work\s+Plan|Summary|Report|Proposal|Strategy|Business\s+Plan)', all_content, re.IGNORECASE)
+        for plan in set(plans):
+            plan_clean = plan.strip()
+            related_messages = [
+                msg for msg in messages 
+                if plan_clean.lower() in (msg.get('content', '') or msg.get('text', '')).lower()
+            ]
+            if related_messages and plan_clean not in topics_found:
+                topics_found[plan_clean] = {
+                    'count': len(related_messages),
+                    'messages': related_messages[:5],
+                    'type': 'document'
+                }
+        
+        # If no topics found, group by channel with actual titles
+        if not topics_found:
+            channels = {}
+            for msg in messages:
+                chat_id = msg.get('source_chat_id') or msg.get('target_chat_id')
+                chat_title = msg.get('chat_title', f'Chat {chat_id}')
+                
+                if chat_title not in channels:
+                    channels[chat_title] = []
+                channels[chat_title].append(msg)
+            
+            for chat_title, channel_messages in channels.items():
+                topics_found[chat_title] = {
+                    'count': len(channel_messages),
+                    'messages': channel_messages[:5],
+                    'type': 'channel'
+                }
+        
+        return topics_found
+    
+    def _get_channel_titles(self, messages: List[Dict]) -> Dict[str, str]:
+        """Get mapping of channel IDs to channel titles"""
+        channel_map = {}
+        for msg in messages:
+            chat_id = msg.get('source_chat_id') or msg.get('target_chat_id')
+            chat_title = msg.get('chat_title')
+            if chat_id and chat_title:
+                channel_map[str(chat_id)] = chat_title
+        return channel_map
 
     def _extract_simple_time_period(self, query: str) -> Optional[str]:
         """Fast extraction of time period from query without LLM"""

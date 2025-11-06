@@ -126,19 +126,24 @@ class GuidedQueryGenerator:
 **Critical Requirements for Questions**:
 1. Be SHORT and DIRECT (max 10-12 words)
 2. Start with action words: "What", "Who", "When", "How", "Which"
-3. Include SPECIFIC details from the conversation (names, projects, etc.)
-4. No vague questions - be concrete and targeted
-5. Each question should reveal NEW information, not rehash what was already answered
+3. Include SPECIFIC details from the conversation (names, projects, events, documents)
+4. Focus on CONTENT, not meta-information (channels, message counts, contributors)
+5. Each question should reveal NEW substantive information
+6. Ask about topics, events, people, timelines, outcomes - NOT about channels or technical details
 
-**Example BAD Questions** (too vague/generic):
-- "Tell me more about this"
-- "What else is happening?"
-- "Can you provide more details?"
+**Example BAD Questions** (too generic or meta-focused):
+❌ "Tell me more about Channel -1002339138388"
+❌ "How do different channels discuss this topic?"
+❌ "What else is happening?"
+❌ "Who are the main contributors to this discussion?"
 
-**Example GOOD Questions** (specific and actionable):
-- "What's the timeline for Satra's PoC presentation?"
-- "Who else is involved in the Bshield proposal?"
-- "What templates were prepared for government agencies?"
+**Example GOOD Questions** (content-focused and specific):
+✅ "What was the conversion rate for the Spring New Product Launch Event?"
+✅ "When is the Q2 Work Plan scheduled to begin?"
+✅ "What templates were prepared for government agencies?"
+✅ "Who is Phuong Verichains developing the Business Plan for?"
+
+**Golden Rule**: Ask about WHAT people are discussing (content), not WHERE they're discussing it (channels).
 
 Always respond with valid JSON following the exact schema provided."""
         
@@ -255,12 +260,26 @@ Also identify:
 
 IMPORTANT RULES: 
 - Questions MUST be SHORT (max 12 words) and DIRECT
-- Use SPECIFIC names, projects, or topics from the actual messages
+- Use SPECIFIC names, projects, events, or documents from the actual messages
 - Start with: What/Who/When/How/Which/Where
+- Focus on CONTENT: events, people, timelines, outcomes, documents
+- NEVER ask about channels, channel IDs, or meta-information
 - NO generic questions like "Tell me more", "What else?", "Can you provide more context?"
-- Each question should ask about ONE specific thing
+- Each question should ask about ONE specific thing mentioned in the messages
 - Only suggest expandable topics that have substantial content (≥8 messages)
 - Questions should be immediately answerable from the chat history
+
+**Examples of what to focus on**:
+✅ Events: "What was the outcome of the Spring New Product Launch Event?"
+✅ Documents: "What are the key points in the Q2 Work Plan?"
+✅ People: "What role does Phuong Verichains have in the Business Plan?"
+✅ Timelines: "When is the PoC presentation scheduled?"
+✅ Metrics: "What was the conversion rate mentioned?"
+
+**What to avoid**:
+❌ Channel references: "Tell me more about Channel -1002339138388"
+❌ Meta questions: "How do different channels discuss this?"
+❌ Contributor questions: "Who are the main contributors?"
 """
         
         return prompt
@@ -275,13 +294,16 @@ IMPORTANT RULES:
             if isinstance(data, dict):
                 count = data.get('count', 0)
                 messages = data.get('messages', [])
+                topic_type = data.get('type', 'general')
                 
-                # Get a sample sender if available
-                sample_sender = "unknown"
+                # Get sample content snippet to give context
+                sample_snippet = ""
                 if messages and len(messages) > 0:
-                    sample_sender = messages[0].get('sender_name', 'unknown')
+                    sample_content = messages[0].get('content', '') or messages[0].get('text', '')
+                    if sample_content:
+                        sample_snippet = f" - \"{sample_content[:80]}...\""
                 
-                formatted.append(f"- **{topic}**: {count} messages (e.g., from {sample_sender})")
+                formatted.append(f"- **{topic}** ({topic_type}): {count} messages{sample_snippet}")
             else:
                 formatted.append(f"- **{topic}**: {data} messages")
         
@@ -393,33 +415,69 @@ IMPORTANT RULES:
         total_messages = search_metadata.get('total_messages', 0)
         channels = search_metadata.get('channels', [])
         topics_found = search_metadata.get('topics_found', {})
+        top_contributors = search_metadata.get('top_contributors', [])
         
         # Generate basic follow-up questions
         follow_ups = []
         
-        if len(topics_found) > 0:
-            # Suggest exploring the largest topic
-            largest_topic = max(topics_found.items(), key=lambda x: x[1].get('count', 0) if isinstance(x[1], dict) else 0)
+        # Find topics that are NOT just channel IDs
+        content_topics = {
+            topic: data for topic, data in topics_found.items()
+            if isinstance(data, dict) and data.get('type') != 'channel'
+        }
+        
+        if content_topics:
+            # Suggest exploring the largest content topic
+            largest_topic = max(content_topics.items(), key=lambda x: x[1].get('count', 0) if isinstance(x[1], dict) else 0)
+            topic_name = largest_topic[0]
+            topic_type = largest_topic[1].get('type', 'topic')
+            
+            # Generate a more specific question based on topic type
+            if topic_type == 'event':
+                follow_ups.append(GuidedQuery(
+                    question=f"What were the results of the {topic_name}?",
+                    reasoning="Follow up on event outcomes",
+                    category="deep_dive"
+                ))
+            elif topic_type == 'document':
+                follow_ups.append(GuidedQuery(
+                    question=f"What are the key points in the {topic_name}?",
+                    reasoning="Explore document details",
+                    category="deep_dive"
+                ))
+            else:
+                follow_ups.append(GuidedQuery(
+                    question=f"What are the latest updates on {topic_name}?",
+                    reasoning="Get current status",
+                    category="deep_dive"
+                ))
+        
+        # Ask about people if we found contributors
+        if top_contributors and len(top_contributors) > 0:
+            main_contributor = top_contributors[0]
             follow_ups.append(GuidedQuery(
-                question=f"Tell me more about {largest_topic[0]}",
-                reasoning=f"This topic has the most messages ({largest_topic[1].get('count', 0) if isinstance(largest_topic[1], dict) else 0})",
+                question=f"What is {main_contributor} working on?",
+                reasoning="Focus on key contributor's activities",
+                category="people"
+            ))
+        
+        # Ask about timeline
+        if total_messages > 5:
+            follow_ups.append(GuidedQuery(
+                question="What is the timeline for this project?",
+                reasoning="Understand time-based progression",
+                category="timeline"
+            ))
+        
+        # Only add generic question if we have nothing better
+        if not follow_ups:
+            follow_ups.append(GuidedQuery(
+                question="What are the next steps being discussed?",
+                reasoning="Identify action items",
                 category="deep_dive"
             ))
         
-        if len(channels) > 1:
-            follow_ups.append(GuidedQuery(
-                question="How do different channels discuss this topic?",
-                reasoning="Multiple channels have relevant content",
-                category="cross_reference"
-            ))
-        
-        follow_ups.append(GuidedQuery(
-            question="Who are the main contributors to this discussion?",
-            reasoning="Identify key people involved",
-            category="people"
-        ))
-        
-        # Generate expandable topics
+        # Generate expandable topics (exclude pure channel topics if possible)
         topics = [
             ExpandableTopic(
                 id=topic_id,
@@ -430,7 +488,22 @@ IMPORTANT RULES:
             )
             for topic_id, data in topics_found.items()
             if (data.get('count', 0) if isinstance(data, dict) else 0) >= 8
+            and (not isinstance(data, dict) or data.get('type') != 'channel')  # Prefer non-channel topics
         ]
+        
+        # If no content topics, include channel topics as fallback
+        if not topics:
+            topics = [
+                ExpandableTopic(
+                    id=topic_id,
+                    label=f"{topic_id} ({data.get('count', 0) if isinstance(data, dict) else data} messages)",
+                    message_count=data.get('count', 0) if isinstance(data, dict) else 0,
+                    reasoning="Channel discussion",
+                    priority=1
+                )
+                for topic_id, data in topics_found.items()
+                if (data.get('count', 0) if isinstance(data, dict) else 0) >= 8
+            ]
         
         # Generate action buttons
         buttons = [
