@@ -36,6 +36,7 @@ ENV/
 backups/
 sessions/
 tests/
+docs/
 # Application specific - User data directory
 data/
 !data/.gitkeep
