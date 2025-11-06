@@ -144,6 +144,29 @@ class InsightsBot:
         except Exception as e:
             logger.error(f"Error stopping bot: {e}")
     
+    def _truncate_text(self, text, max_length):
+        """
+        Truncate text at word boundary for better readability
+        
+        Args:
+            text: Text to truncate
+            max_length: Maximum length
+            
+        Returns:
+            Truncated text with ellipsis if needed
+        """
+        if len(text) <= max_length:
+            return text
+        
+        # Find the last space before max_length
+        truncated = text[:max_length]
+        last_space = truncated.rfind(' ')
+        
+        if last_space > max_length * 0.7:  # Only use space if it's not too far back
+            truncated = truncated[:last_space]
+        
+        return truncated.rstrip('.,!?;:') + '...'
+    
     def _create_inline_keyboard(self, suggestions):
         """
         Create an inline keyboard from guided query suggestions
@@ -160,19 +183,23 @@ class InsightsBot:
         keyboard = []
         
         # Add follow-up question buttons (max 3)
+        # Use longer limit and smart truncation for better clarity
         for i, question in enumerate(suggestions.follow_up_questions[:3], 1):
+            # Format: "1. Question text..."
+            button_text = f"{i}. {self._truncate_text(question.question, 95)}"
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"{i}️⃣ {question.question[:60]}{'...' if len(question.question) > 60 else ''}",
+                    text=button_text,
                     callback_data=f"suggest:{i-1}"  # Zero-indexed for array access
                 )
             ])
         
         # Add expandable topic buttons (if any)
         for topic in suggestions.expandable_topics[:2]:  # Max 2 topics to avoid clutter
+            topic_text = f"📖 {self._truncate_text(topic.label, 90)}"
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"📖 {topic.label[:50]}{'...' if len(topic.label) > 50 else ''}",
+                    text=topic_text,
                     callback_data=f"expand:{topic.id}"
                 )
             ])

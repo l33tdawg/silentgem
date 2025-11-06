@@ -121,13 +121,24 @@ class GuidedQueryGenerator:
             response_text=response_text
         )
         
-        system_prompt = """You are an expert conversation analyst specializing in generating highly relevant follow-up questions.
+        system_prompt = """You are an expert at generating direct, actionable follow-up questions for business chat analysis.
 
-Your goal is to suggest questions that:
-1. Help users discover insights they might have missed
-2. Connect information across different sources
-3. Dive deeper into substantial topics
-4. Are specific to THIS conversation (not generic)
+**Critical Requirements for Questions**:
+1. Be SHORT and DIRECT (max 10-12 words)
+2. Start with action words: "What", "Who", "When", "How", "Which"
+3. Include SPECIFIC details from the conversation (names, projects, etc.)
+4. No vague questions - be concrete and targeted
+5. Each question should reveal NEW information, not rehash what was already answered
+
+**Example BAD Questions** (too vague/generic):
+- "Tell me more about this"
+- "What else is happening?"
+- "Can you provide more details?"
+
+**Example GOOD Questions** (specific and actionable):
+- "What's the timeline for Satra's PoC presentation?"
+- "Who else is involved in the Bshield proposal?"
+- "What templates were prepared for government agencies?"
 
 Always respond with valid JSON following the exact schema provided."""
         
@@ -193,10 +204,12 @@ Always respond with valid JSON following the exact schema provided."""
 
 ## Your Task
 
-Generate 3 highly specific follow-up questions that would help the user:
-1. **Deep Dive**: Explore substantial topics in more detail
-2. **Cross-Reference**: Compare information across sources or time periods
-3. **Uncover Insights**: Discover non-obvious connections or patterns
+Generate 3 DIRECT, SPECIFIC follow-up questions (10-12 words max each):
+1. **Deep Dive**: Ask about specific details mentioned (timelines, people, deliverables)
+2. **Cross-Reference**: Compare specific entities/events (e.g., "How does X compare to Y?")
+3. **Next Steps**: Ask about concrete actions or outcomes (e.g., "What's the deadline for X?")
+
+**Question Formula**: [What/Who/When/How/Which] + [Specific Detail from Messages] + [Action/Outcome]?
 
 Also identify:
 - Which topics have enough content to warrant expansion (≥8 messages)
@@ -207,19 +220,19 @@ Also identify:
 {{
   "follow_up_questions": [
     {{
-      "question": "Specific question based on actual findings...",
-      "reasoning": "Why this question is relevant",
-      "category": "deep_dive|cross_reference|timeline|people"
+      "question": "What's the deadline for Satra's PoC presentation?",
+      "reasoning": "Timeline details are crucial for project planning",
+      "category": "deep_dive"
     }},
     {{
-      "question": "Another specific question...",
-      "reasoning": "Why this helps the user",
-      "category": "deep_dive|cross_reference|timeline|people"
+      "question": "Who besides @quangtuanvrc is working on the proposal?",
+      "reasoning": "Identify all team members involved",
+      "category": "people"
     }},
     {{
-      "question": "Third insightful question...",
-      "reasoning": "What this uncovers",
-      "category": "deep_dive|cross_reference|timeline|people"
+      "question": "Which government agencies received the templates?",
+      "reasoning": "Understand scope of outreach efforts",
+      "category": "cross_reference"
     }}
   ],
   "expandable_topics": [
@@ -240,11 +253,14 @@ Also identify:
   "reasoning": "Overall explanation of your suggestion strategy"
 }}
 
-IMPORTANT: 
-- Questions must be SPECIFIC to the actual content found
-- Avoid generic questions like "Tell me more" or "What else?"
-- Focus on actionable, insightful questions
+IMPORTANT RULES: 
+- Questions MUST be SHORT (max 12 words) and DIRECT
+- Use SPECIFIC names, projects, or topics from the actual messages
+- Start with: What/Who/When/How/Which/Where
+- NO generic questions like "Tell me more", "What else?", "Can you provide more context?"
+- Each question should ask about ONE specific thing
 - Only suggest expandable topics that have substantial content (≥8 messages)
+- Questions should be immediately answerable from the chat history
 """
         
         return prompt
