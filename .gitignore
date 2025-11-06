@@ -35,6 +35,7 @@ ENV/
 *.session-wal
 backups/
 sessions/
+tests/
 
 # Application specific - User data directory
 data/
