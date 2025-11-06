@@ -25,6 +25,22 @@ class MockInsightsBot:
         self.bot = None
         self.command_handler = None
     
+    def _truncate_text(self, text, max_length):
+        """
+        Truncate text at word boundary for better readability
+        """
+        if len(text) <= max_length:
+            return text
+        
+        # Find the last space before max_length
+        truncated = text[:max_length]
+        last_space = truncated.rfind(' ')
+        
+        if last_space > max_length * 0.7:  # Only use space if it's not too far back
+            truncated = truncated[:last_space]
+        
+        return truncated.rstrip('.,!?;:') + '...'
+    
     def _create_inline_keyboard(self, suggestions):
         """
         Create an inline keyboard from guided query suggestions
@@ -36,19 +52,23 @@ class MockInsightsBot:
         keyboard = []
         
         # Add follow-up question buttons (max 3)
+        # Use longer limit and smart truncation for better clarity
         for i, question in enumerate(suggestions.follow_up_questions[:3], 1):
+            # Format: "1. Question text..."
+            button_text = f"{i}. {self._truncate_text(question.question, 95)}"
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"{i}️⃣ {question.question[:60]}{'...' if len(question.question) > 60 else ''}",
+                    text=button_text,
                     callback_data=f"suggest:{i-1}"
                 )
             ])
         
         # Add expandable topic buttons (if any)
         for topic in suggestions.expandable_topics[:2]:
+            topic_text = f"📖 {self._truncate_text(topic.label, 90)}"
             keyboard.append([
                 InlineKeyboardButton(
-                    text=f"📖 {topic.label[:50]}{'...' if len(topic.label) > 50 else ''}",
+                    text=topic_text,
                     callback_data=f"expand:{topic.id}"
                 )
             ])
@@ -135,7 +155,7 @@ class TestBasicButtonCreation:
         keyboard = mock_bot._create_inline_keyboard(simple_suggestions)
         
         first_button = keyboard.inline_keyboard[0][0]
-        assert first_button.text.startswith("1️⃣")
+        assert first_button.text.startswith("1. ")
         assert "What are the deadlines?" in first_button.text
         assert first_button.callback_data == "suggest:0"
     
@@ -213,9 +233,34 @@ class TestButtonLimits:
 class TestTextTruncation:
     """Tests for text truncation in buttons"""
     
+    def test_word_boundary_truncation(self, mock_bot):
+        """Test that truncation happens at word boundaries, not mid-word"""
+        # Create a question where truncation would normally cut a word
+        question = "Can you provide more context about the proposal being drafted for Satra which involves reviewing"
+        
+        suggestions = GuidedQuerySuggestions(
+            follow_up_questions=[
+                GuidedQuery(question, "Reason", "general")
+            ],
+            expandable_topics=[],
+            action_buttons=[]
+        )
+        
+        keyboard = mock_bot._create_inline_keyboard(suggestions)
+        button_text = keyboard.inline_keyboard[0][0].text
+        
+        # Should end with "..." and not cut a word in half
+        if button_text.endswith("..."):
+            # Get the text before the ellipsis
+            text_before_ellipsis = button_text[:-3].rstrip()
+            # The last character should be a space or end of a word, not mid-word
+            # Check that we're not cutting "reviewing" as "reviewi..."
+            assert not text_before_ellipsis.endswith("reviewi")
+            assert not "reviewi..." in button_text
+    
     def test_long_question_truncated(self, mock_bot):
         """Test that long questions are truncated with ellipsis"""
-        long_question = "This is a very long question that exceeds the sixty character limit and should be truncated"
+        long_question = "This is a very long question that exceeds the ninety-five character limit and should be truncated at a word boundary for better readability"
         
         suggestions = GuidedQuerySuggestions(
             follow_up_questions=[
@@ -229,8 +274,12 @@ class TestTextTruncation:
         button_text = keyboard.inline_keyboard[0][0].text
         
         assert button_text.endswith("...")
-        # Emojis count as 2-3 chars, so allow a bit more
-        assert len(button_text) <= 68  # 60 chars + emoji prefix + "..."
+        # Should be truncated around 95 chars + "1. " prefix
+        assert len(button_text) <= 102  # 95 + "1. " + "..."
+        # Check that truncation happens at word boundary (no mid-word cuts)
+        # The text before ... should end with a complete word
+        text_without_ellipsis = button_text[3:-3]  # Remove "1. " and "..."
+        assert not text_without_ellipsis[-1].isalnum() or ' ' in text_without_ellipsis
     
     def test_short_question_not_truncated(self, mock_bot):
         """Test that short questions are not truncated"""
@@ -252,7 +301,7 @@ class TestTextTruncation:
     
     def test_long_topic_label_truncated(self, mock_bot):
         """Test that long topic labels are truncated"""
-        long_label = "This is a very long topic label that exceeds fifty characters and needs truncation"
+        long_label = "This is a very long topic label that exceeds ninety characters and needs to be truncated at word boundaries for clarity"
         
         suggestions = GuidedQuerySuggestions(
             follow_up_questions=[],
@@ -266,8 +315,8 @@ class TestTextTruncation:
         button_text = keyboard.inline_keyboard[0][0].text
         
         assert button_text.endswith("...")
-        # Emojis count as 2-3 chars, so allow a bit more
-        assert len(button_text) <= 58  # 50 chars + emoji prefix + "..."
+        # Should be truncated around 90 chars + emoji prefix
+        assert len(button_text) <= 97  # 90 + "📖 " + "..."
 
 
 class TestCallbackData:

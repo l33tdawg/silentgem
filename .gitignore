@@ -36,7 +36,7 @@ ENV/
 backups/
 sessions/
 tests/
-
+silentgemt/tests/ 
 # Application specific - User data directory
 data/
 !data/.gitkeep
