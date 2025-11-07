@@ -342,6 +342,9 @@ class CommandHandler:
                     "time_period": getattr(interpretation, "time_period", None),
                     "expanded_terms": getattr(interpretation, "expanded_terms", []),
                     "intent": getattr(interpretation, "intent", "search"),
+                    "query_type": getattr(interpretation, "query_type", "exploratory"),
+                    "status_type": getattr(interpretation, "status_type", None),
+                    "subject_person": getattr(interpretation, "subject_person", None),
                     "entities": entities,
                     "topics": topics
                 }

@@ -71,8 +71,16 @@ class QueryProcessor:
                     # Keep the original query
                     advanced_result["original_query"] = query_text
                     
-                    # If basic parsing detected specific intents, preserve them
-                    if basic_parsed.get("intent") == "track_evolution" and basic_parsed.get("query_text"):
+                    # If basic parsing detected specific intents or query types, preserve them
+                    # Simple status queries should always use basic parsing results
+                    if basic_parsed.get("intent") == "simple_status":
+                        # Override with basic parsing for simple status queries
+                        advanced_result["intent"] = basic_parsed["intent"]
+                        advanced_result["query_type"] = basic_parsed.get("query_type", "simple")
+                        advanced_result["status_type"] = basic_parsed.get("status_type")
+                        advanced_result["subject_person"] = basic_parsed.get("subject_person")
+                        advanced_result["expanded_terms"] = basic_parsed.get("expanded_terms", [])
+                    elif basic_parsed.get("intent") == "track_evolution" and basic_parsed.get("query_text"):
                         advanced_result["intent"] = "track_evolution"
                         
                     # Merge any missing fields from basic parsing
@@ -104,6 +112,10 @@ class QueryProcessor:
         # If no NLU results, just use basic parsing results
         if "query_text" not in result or not result["query_text"]:
             result["query_text"] = query_text
+        
+        # Ensure query_type is set (default to exploratory if not set)
+        if "query_type" not in result:
+            result["query_type"] = "exploratory"
             
         return result
     
@@ -457,21 +469,101 @@ Return ONLY the JSON object, no other text."""
         
         # Determine intention - default to search
         intent = "search"
+        query_type = "exploratory"  # Default query type
+        
+        # Check for simple yes/no status questions FIRST (highest priority)
+        # Note: These patterns must NOT match "what is X working on?" type questions
+        simple_status_patterns = [
+            (r'\b(is|are|was|were|did)\s+(\w+)\s+(on\s+leave|on vacation|out of office|ooo|away|absent|off)\b', 'leave_status'),
+            (r'\b(is|are|was|were)\s+(\w+)\s+(available|here|in office|present)\b', 'availability_status'),
+            # Match "is X working" only if NOT followed by "on" (to avoid "working on")
+            (r'\b(is|are|was|were)\s+(\w+)\s+working(?!\s+on)\b', 'availability_status'),
+            (r'\b(did|has|have)\s+(\w+)\s+(attend|join|go to|participate)', 'attendance_status'),
+            (r'\b(is|are|was|were)\s+(\w+)\s+(sick|ill|unwell)', 'health_status'),
+        ]
+        
+        for pattern, status_type in simple_status_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                intent = "simple_status"
+                query_type = "simple"
+                person = match.group(2) if len(match.groups()) >= 2 else None
+                result["status_type"] = status_type
+                result["subject_person"] = person
+                
+                # Build search query that includes person name AND status terms
+                search_terms = []
+                if person:
+                    search_terms.append(person)
+                
+                # Expand search terms for leave status
+                if status_type == "leave_status":
+                    status_keywords = [
+                        "leave", "vacation", "OOO", "out of office", 
+                        "PTO", "time off", "away", "off", "holiday",
+                        "annual leave", "sick leave", "not available"
+                    ]
+                    result["expanded_terms"] = status_keywords
+                    # Create query: person AND (keyword1 OR keyword2 OR ...)
+                    if person:
+                        result["query_text"] = f"{person} {' '.join(status_keywords[:3])}"
+                    else:
+                        result["query_text"] = " OR ".join(status_keywords[:5])
+                        
+                elif status_type == "availability_status":
+                    status_keywords = [
+                        "available", "in office", "working", "here", 
+                        "present", "back", "returned"
+                    ]
+                    result["expanded_terms"] = status_keywords
+                    if person:
+                        result["query_text"] = f"{person} {' '.join(status_keywords[:3])}"
+                    else:
+                        result["query_text"] = " OR ".join(status_keywords[:5])
+                        
+                elif status_type == "attendance_status":
+                    status_keywords = [
+                        "attended", "joined", "went to", "participated",
+                        "was at", "showed up", "present at"
+                    ]
+                    result["expanded_terms"] = status_keywords
+                    if person:
+                        result["query_text"] = f"{person} {' '.join(status_keywords[:3])}"
+                    else:
+                        result["query_text"] = " OR ".join(status_keywords[:5])
+                        
+                elif status_type == "health_status":
+                    status_keywords = [
+                        "sick", "ill", "unwell", "not feeling well",
+                        "sick leave", "medical leave"
+                    ]
+                    result["expanded_terms"] = status_keywords
+                    if person:
+                        result["query_text"] = f"{person} {' '.join(status_keywords[:3])}"
+                    else:
+                        result["query_text"] = " OR ".join(status_keywords[:5])
+                break
         
         # Check for summarization intent
-        if any(term in query_lower for term in ["summarize", "summary", "overview"]):
-            intent = "summarize"
-        # Check for analysis intent
-        elif any(term in query_lower for term in ["analyze", "analysis", "explain", "understand"]):
-            intent = "analyze"
-        # Check for tracking intent
-        elif any(term in query_lower for term in ["track", "follow", "development", "update", "latest", "current", "status"]):
-            intent = "track_evolution"
-        # Check for comparison intent
-        elif any(term in query_lower for term in ["compare", "difference", "versus", "vs"]):
-            intent = "compare"
+        if intent != "simple_status":
+            if any(term in query_lower for term in ["summarize", "summary", "overview"]):
+                intent = "summarize"
+                query_type = "exploratory"
+            # Check for analysis intent
+            elif any(term in query_lower for term in ["analyze", "analysis", "explain", "understand"]):
+                intent = "analyze"
+                query_type = "exploratory"
+            # Check for tracking intent
+            elif any(term in query_lower for term in ["track", "follow", "development", "update", "latest", "current", "status"]):
+                intent = "track_evolution"
+                query_type = "exploratory"
+            # Check for comparison intent
+            elif any(term in query_lower for term in ["compare", "difference", "versus", "vs"]):
+                intent = "compare"
+                query_type = "exploratory"
         
         result["intent"] = intent
+        result["query_type"] = query_type
         
         # Extract entity information
         sender = None

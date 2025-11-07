@@ -210,7 +210,28 @@ Return your analysis as a JSON object with these fields:
 - Start IMMEDIATELY with the answer/information
 - State facts directly as if reporting findings
 
-**Response Format**: 
+**QUERY TYPE DETECTION - CRITICAL**:
+
+Before answering, identify the query type:
+
+1. **SIMPLE FACTUAL QUERY** (Yes/No, Status Check, Single Fact):
+   - Examples: "is X on leave?", "did Y attend the meeting?", "what time is the call?"
+   - Response: 1-2 sentences MAX, direct answer only
+   - Format: "[Yes/No/Status] [supporting fact if found]"
+   - DO NOT provide comprehensive background unless specifically asked
+
+2. **EXPLORATORY QUERY** (What is happening, Overview, Multiple aspects):
+   - Examples: "what is X working on?", "tell me about Y", "summarize the project"
+   - Response: Comprehensive 3-4 paragraphs with all relevant details
+   - Format: Include all aspects, connections, and context
+
+**Response Format for SIMPLE queries**: 
+- Single direct answer (1-2 sentences maximum)
+- Only include the specific fact requested
+- Example: "No information found about X being on leave."
+- Example: "Yes, X is on vacation until Friday."
+
+**Response Format for EXPLORATORY queries**: 
 - Lead with the most important/direct answer first
 - Provide comprehensive details: 3-4 well-developed paragraphs (800-1200 characters)
 - Include specific details: names, dates, numbers, quotes, context
@@ -323,6 +344,25 @@ This emphasis on security and risk management aligns with the product's overall 
         """Build a focused user prompt with essential context"""
         
         prompt_parts = []
+        
+        # Check query type from metadata
+        query_type = "exploratory"
+        intent = "search"
+        if query_metadata:
+            query_type = query_metadata.get("query_type", "exploratory")
+            intent = query_metadata.get("intent", "search")
+            status_type = query_metadata.get("status_type")
+            subject_person = query_metadata.get("subject_person")
+            
+            # Add query type hint at the very beginning
+            if query_type == "simple" and intent == "simple_status":
+                prompt_parts.append(f"## QUERY TYPE: SIMPLE STATUS QUESTION")
+                prompt_parts.append(f"## REQUIRED: Answer with 1-2 sentences maximum")
+                if status_type:
+                    prompt_parts.append(f"## Status Type: {status_type}")
+                if subject_person:
+                    prompt_parts.append(f"## Person: {subject_person}")
+                prompt_parts.append("")
         
         # Include recent conversation context for follow-ups FIRST
         depth = rich_context.get("conversation_metadata", {}).get("total_exchanges", 0)
