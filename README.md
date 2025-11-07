@@ -26,6 +26,7 @@ SilentGem is a Telegram userbot that automatically translates messages from sour
 - 🤖 AI-powered guided query suggestions as clickable buttons (v1.5)
 - 📖 One-click topic expansion for deep-dive exploration (v1.5)
 - 💾 Query templates for saving and reusing common searches (v1.5)
+- 🔄 Automatic semantic search indexing with real-time updates (v1.6)
 
 ## Requirements
 
@@ -337,7 +338,23 @@ Buttons shown:
 
 Tap any button and the bot instantly processes that question!
 
-### Version 1.6 - Proactive Assistant
+### ✅ Version 1.6 - Automatic Semantic Indexing (COMPLETED)
+
+**Real-time semantic search that stays up-to-date automatically:**
+- **Incremental embedding generation**: New messages automatically get indexed for semantic search
+- **Background processing**: Embeddings generate in the background without slowing down message processing
+- **Smart semantic search**: Find related messages even when they don't share keywords
+- **Example**: Search "Philippines" and discover mentions of SM, TrueID, and related business discussions
+- **Zero maintenance**: No manual batch processing required
+- **Worker script included**: Process backlog or run continuously with `python -m silentgem.embeddings.embedding_worker`
+
+**Technical Details:**
+- Uses sentence-transformers (all-MiniLM-L6-v2) for 384-dimensional semantic vectors
+- Lightweight and fast: ~80MB model, processes 200+ messages/second in batches
+- Non-blocking async architecture ensures message processing stays fast
+- SQLite-based storage keeps everything local and private
+
+### Version 1.7 - Proactive Assistant
 
 Transforming from reactive search to proactive assistant:
 - **Topic Alerts**: Set up notifications for topics you care about
