@@ -8,6 +8,7 @@ of modern LLMs (30k+ tokens).
 
 import json
 import time
+import re
 from typing import Dict, List, Any, Optional, Tuple
 from loguru import logger
 from datetime import datetime, timedelta
@@ -174,11 +175,11 @@ Return your analysis as a JSON object with these fields:
             if estimated_tokens > self.available_context_tokens:
                 user_prompt = self._trim_context_for_tokens(user_prompt, self.available_context_tokens - len(system_prompt) // 4)
             
-            # Generate response
+            # Generate response with higher token limit and lower temperature for consistent comprehensive synthesis
             response = await self.llm_client.chat_completion([
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ], temperature=0.3, max_tokens=1200)
+            ], temperature=0.1, max_tokens=2000)  # Lower temp = more deterministic, comprehensive
             
             if response and response.get("content"):
                 return response["content"]
@@ -216,6 +217,63 @@ Return your analysis as a JSON object with these fields:
 - Use bullet points when listing multiple items/people/events
 - Provide enough context for someone unfamiliar with the topic to understand
 - No meta-commentary about the search itself
+
+**IMPORTANT - Comprehensive Coverage**:
+- Read ALL provided messages carefully, not just the most recent ones
+- SYNTHESIZE information from multiple messages to provide a complete picture
+- Include all relevant activities, meetings, plans, and developments
+- Don't miss important details like scheduled meetings, upcoming events, or external partnerships
+- If multiple aspects of a topic are discussed, cover ALL of them
+- Look for connections between messages even if they're from different dates
+
+**For "What is X working on?" queries, MANDATORY CHECKLIST - Include ALL of these categories if present**:
+
+✓ **External Partnerships & Clients**:
+  - Partner company names (any mentioned companies or organizations)
+  - Client names and engagements
+  - Collaboration details
+  - WHERE: Include office locations (any cities, countries, or offices mentioned)
+
+✓ **Meetings & Events**:
+  - Scheduled meetings (dates, participants, purposes)
+  - Presentations and their audiences
+  - Upcoming events or milestones
+  - WHEN: Include specific dates/timeframes mentioned
+
+✓ **Product & Technical Work**:
+  - Product names and features (any mentioned products or services)
+  - Certifications being pursued (any certifications or compliance work)
+  - Technical implementations
+  - Infrastructure changes
+
+✓ **Projects & Initiatives**:
+  - Current projects in progress
+  - Proposals being drafted
+  - POC (Proof of Concept) activities
+  - Deployments and rollouts
+
+✓ **Internal Work**:
+  - Team tasks and assignments
+  - Templates and documentation
+  - Reports and assessments
+
+**MANDATORY SYNTHESIS PROTOCOL**:
+
+BEFORE writing your response, scan ALL messages for:
+□ Acronyms (2-4 capital letters like SM, FIDO, POC) - these are often partners/products
+□ camelCase terms (like eKYC) - these are usually product names
+□ Company/partner names mentioned with "client", "partner", "customer", "booked"
+□ Certifications, standards, or compliance mentions
+□ Location names (cities, countries, offices) in business context
+□ Scheduled events, meetings, or presentations
+
+THEN write your response including ALL found elements:
+- If you find "SM" with "client/booked", report it as a partner engagement
+- If you find "FIDO" with "certification/cert", report the certification work
+- If you find "eKYC" or camelCase products, report the product work
+- If acronyms appear, try to infer full names from context
+
+DO NOT write a vague response if specific entities are present. Every acronym, every product name, every partner reference MUST be included.
 
 **Example BAD Response**:
 "I'd be happy to help you understand how X works. Based on the messages, it appears that..."
@@ -292,9 +350,79 @@ This emphasis on security and risk management aligns with Bshield's overall miss
         if search_results:
             prompt_parts.append(f"## Relevant Messages:")
             
-            # Group by chat but limit to top results
+            # Rank messages by importance before grouping using GENERIC patterns
+            def message_priority(msg):
+                """Calculate priority score for a message (higher = more important)"""
+                content = msg.get("content", "") or msg.get("text", "")
+                content_lower = content.lower()
+                score = 0
+                
+                # CRITICAL: External business indicators (generic patterns)
+                critical_patterns = [
+                    # Meetings and presentations
+                    (r'\b(meeting|presentation|demo|call|conference)\b', 50),
+                    # Partnerships and clients  
+                    (r'\b(partner|partnership|client|customer|vendor)\b', 50),
+                    # Locations/offices (capitalized place names)
+                    (r'\b[A-Z][a-z]{4,}\s+(?:office|market|region)\b', 100),
+                    # Countries/cities mentioned with context
+                    (r'\b(?:in|from|at|to)\s+([A-Z][a-z]{3,})\b', 80),
+                    # Company names (2-3 capitalized words)
+                    (r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b', 60),
+                    # Certifications and standards
+                    (r'\b(certification|certified|standard|compliance|license)\b', 50),
+                    # Products and features (camelCase or PascalCase)
+                    (r'\b([a-z]+[A-Z][a-zA-Z]*)\b', 40),
+                    # Acronyms (3+ capital letters)
+                    (r'\b([A-Z]{3,})\b', 40),
+                    # POC and contracts
+                    (r'\b(poc|proof of concept|contract|agreement|deal)\b', 50),
+                    # Roadmap and strategic terms
+                    (r'\b(roadmap|milestone|initiative|strategy|launch)\b', 40),
+                    # Scheduling indicators
+                    (r'\b(scheduled|upcoming|next week|next month|tomorrow)\b', 45),
+                    # Email addresses or formal communications
+                    (r'@\w+', 30),
+                ]
+                
+                # Score based on pattern matching
+                for pattern, points in critical_patterns:
+                    if re.search(pattern, content_lower):
+                        score += points
+                
+                # Boost messages with mentions (usually important communications)
+                mentions = re.findall(r'@\w+', content)
+                score += len(mentions) * 10
+                
+                # Boost messages with multiple sentences (more detailed)
+                sentence_count = len(re.findall(r'[.!?]+', content))
+                if sentence_count >= 3:
+                    score += 15
+                elif sentence_count >= 2:
+                    score += 10
+                
+                # Boost recent messages slightly
+                timestamp = msg.get("timestamp", 0)
+                if timestamp:
+                    days_old = (time.time() - timestamp) / 86400
+                    if days_old < 7:
+                        score += 10
+                    elif days_old < 30:
+                        score += 5
+                
+                return score
+            
+            # Sort ALL results by priority, then timestamp
+            # This ensures messages with business-critical patterns rise to the top
+            sorted_results = sorted(
+                search_results,  # Sort ALL results
+                key=lambda x: (message_priority(x), x.get("timestamp", 0)),
+                reverse=True
+            )
+            
+            # Include ALL prioritized messages for comprehensive synthesis (no artificial limit)
             chat_groups = {}
-            for result in search_results[:10]:  # Limit total results
+            for result in sorted_results:  # Use ALL sorted results
                 chat_id = result.get("source_chat_id") or result.get("target_chat_id") or "unknown"
                 if chat_id not in chat_groups:
                     chat_groups[chat_id] = []
@@ -304,10 +432,10 @@ This emphasis on security and risk management aligns with Bshield's overall miss
                 chat_title = messages[0].get("chat_title", f"Chat {chat_id}")
                 prompt_parts.append(f"\n**{chat_title}:**")
                 
-                # Sort by timestamp and limit
-                messages.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+                # Sort by priority within chat
+                messages.sort(key=lambda x: (message_priority(x), x.get("timestamp", 0)), reverse=True)
                 
-                for msg in messages[:5]:  # Max 5 per chat
+                for msg in messages:  # Include ALL messages per chat (no artificial limit)
                     content = msg.get("content", "") or msg.get("text", "")
                     sender = msg.get("sender_name", "") or msg.get("sender", "Unknown")
                     timestamp = msg.get("timestamp")
@@ -321,9 +449,9 @@ This emphasis on security and risk management aligns with Bshield's overall miss
                     else:
                         time_str = "recent"
                     
-                    # Truncate long messages
-                    if len(content) > 300:
-                        content = content[:300] + "..."
+                    # Truncate long messages but keep more content for better context
+                    if len(content) > 500:
+                        content = content[:500] + "..."
                     
                     prompt_parts.append(f"- {sender} ({time_str}): {content}")
             

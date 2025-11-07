@@ -225,11 +225,20 @@ class QueryProcessor:
 }
 
 Guidelines:
-- processed_query: Remove filler words, keep core meaning
-- expanded_terms: Add synonyms and related terms (max 5)
+- processed_query: Extract the MAIN ENTITY or TOPIC being asked about. For "what is X doing/working on?", use just "X"
+- expanded_terms: For queries about "what is X doing/working on?", include variations of X name and common associated terms (products, partners, projects, etc.). Keep it broad to capture all related discussions.
 - time_period: Extract if mentioned, otherwise null
 - sender: Only if asking about specific person
 - intent: Determine the user's goal
+
+Examples:
+Query: "what is TrueID team working on?"
+Response: {"processed_query": "trueid", "expanded_terms": ["TrueID", "trueID"], "time_period": null, "sender": null, "intent": "search"}
+
+Query: "what happened with SecureMetric yesterday?"
+Response: {"processed_query": "securemetric", "expanded_terms": ["SecureMetric", "SM"], "time_period": "yesterday", "sender": null, "intent": "search"}
+
+NOTE: For multi-word entity names, use case variations WITHOUT spaces to avoid false matches (e.g., "TrueID" and "trueID", not "true id").
 
 Return ONLY the JSON object, no other text."""
             

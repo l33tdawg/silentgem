@@ -268,11 +268,19 @@ class CommandHandler:
                 cross_chats = getattr(interpretation, "cross_chats", True)  # Default to True
                 search_chat_id = None if cross_chats else chat_id
                 
+                # Get query from interpretation (handle both dict and object)
+                if isinstance(interpretation, dict):
+                    interp_query = interpretation.get("processed_query") or interpretation.get("query_text") or query
+                    interp_time = interpretation.get("time_period")
+                else:
+                    interp_query = getattr(interpretation, "processed_query", None) or getattr(interpretation, "query_text", None) or query
+                    interp_time = getattr(interpretation, "time_period", None)
+                
                 search_params = QueryParams(
-                    query=getattr(interpretation, "processed_query", None) or query,
-                    limit=15 if self.fast_mode else 20,  # Fewer results for speed
+                    query=interp_query,
+                    limit=50 if self.fast_mode else 100,  # Higher limits for comprehensive coverage
                     chat_id=search_chat_id,
-                    time_period=getattr(interpretation, "time_period", None)
+                    time_period=interp_time
                 )
             except Exception as e:
                 logger.warning(f"Error preparing search parameters: {e}")
@@ -280,7 +288,7 @@ class CommandHandler:
                 from silentgem.query_params import QueryParams
                 search_params = QueryParams(
                     query=query,
-                    limit=15 if self.fast_mode else 20,
+                    limit=50 if self.fast_mode else 100,
                     chat_id=None  # Default to searching across all chats
                 )
 
@@ -474,7 +482,7 @@ class CommandHandler:
                 from silentgem.query_params import QueryParams
                 search_params = QueryParams(
                     query=query,
-                    limit=20,
+                    limit=100,  # Higher limit for comprehensive guided queries
                     chat_id=None  # Cross-chat search
                 )
                 messages = await get_search_engine().search(search_params)
