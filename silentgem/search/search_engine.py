@@ -13,6 +13,8 @@ from silentgem.database.message_store import get_message_store
 from silentgem.config.insights_config import get_insights_config
 from silentgem.llm.llm_client import get_llm_client
 from silentgem.query_params import QueryParams
+from silentgem.embeddings.embedding_service import get_embedding_service
+import numpy as np
 
 # Simple cache for expanded query terms
 _expansion_cache = {}
@@ -26,21 +28,23 @@ class SearchEngine:
         self.message_store = get_message_store()
         self.config = get_insights_config()
         self.llm_client = get_llm_client()
+        self.embedding_service = None  # Lazy load on first use
         
         # Performance settings
         self.fast_mode = True  # Skip expensive LLM expansions
         self.max_semantic_terms = 3  # Limit semantic expansion
         self.enable_context_collection = False  # Skip context collection for speed
+        self.use_semantic_search = True  # Enable semantic search by default
     
     async def search(self, search_params: QueryParams) -> List[Dict[str, Any]]:
         """
-        Search for messages using QueryParams object
+        Search for messages using QueryParams object with multi-pass enrichment
         
         Args:
             search_params: QueryParams object containing search parameters
             
         Returns:
-            List of matching messages
+            List of matching messages (enriched with related context)
         """
         # Extract parameters from QueryParams
         query = search_params.query
@@ -48,18 +52,35 @@ class SearchEngine:
         time_limit = search_params.get_time_range()
         strategies = search_params.strategies or ["direct"]  # Default to direct only for speed
         
+        # Use requested limit, with a minimum of 50 for comprehensive context
+        effective_limit = max(search_params.limit, 50)
+        
         # Call the optimized search method
-        results, _ = await self._search(
+        results, metadata = await self._search(
             query=query,
             chat_ids=chat_ids,
             sender=search_params.sender,
             collect_context=self.enable_context_collection,
             llm_expand_query=not self.fast_mode,  # Skip LLM expansion in fast mode
-            max_results=search_params.limit,
+            max_results=effective_limit,
             time_limit=time_limit,
             strategies=strategies,
             parsed_query={"processed_query": query, "time_period": search_params.time_period}
         )
+        
+        # SEMANTIC ENRICHMENT: Add semantically similar messages
+        if self.use_semantic_search and len(results) < 100:
+            semantic_results = await self.semantic_search(
+                query=query,
+                limit=50,
+                similarity_threshold=0.2,  # Lower threshold to catch related context
+                exclude_ids=[msg.get('message_id') or msg.get('id') for msg in results]
+            )
+            
+            if semantic_results:
+                logger.info(f"Adding {len(semantic_results)} semantically similar messages")
+                # Merge results (keyword results first, then semantic)
+                results.extend(semantic_results)
         
         return results
 
@@ -281,6 +302,372 @@ class SearchEngine:
         expanded = list(set(expanded))[:self.max_semantic_terms]
         
         return expanded
+    
+    async def _two_level_enrichment(
+        self,
+        initial_results: List[Dict[str, Any]],
+        original_query: str,
+        chat_ids: Optional[List[int]],
+        time_limit: Optional[Tuple[datetime, datetime]],
+        max_total: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Two-level enrichment to capture indirectly related messages
+        Level 1: Extract entities from initial results (e.g., SM, eKYC from TrueID messages)
+        Level 2: Search for those entities to find related context (e.g., Philippines from SM messages)
+        
+        Args:
+            initial_results: Initial search results
+            original_query: Original search query
+            chat_ids: Chat IDs to filter
+            time_limit: Time range limit
+            max_total: Maximum total messages to return
+            
+        Returns:
+            Enriched list of messages
+        """
+        try:
+            # LEVEL 1: Extract key entities from initial results
+            level1_entities = set()
+            
+            for msg in initial_results:
+                content = msg.get("content", "") or msg.get("text", "")
+                
+                # Short acronyms (2-4 chars) - usually company names
+                acronyms = re.findall(r'\b([A-Z]{2,4})\b', content)
+                for ac in acronyms:
+                    if ac not in ['THE', 'AND', 'FOR', 'VRC', 'VNG']:
+                        level1_entities.add(ac)
+                
+                # camelCase (products)
+                camel = re.findall(r'\b([a-z]+[A-Z][a-zA-Z]*)\b', content)
+                level1_entities.update(camel[:5])  # Limit per message
+            
+            logger.info(f"Level 1 entities: {list(level1_entities)[:10]}")
+            
+            # Search for level 1 entities
+            seen_ids = {msg.get("message_id") for msg in initial_results}
+            level1_messages = list(initial_results)
+            
+            for entity in list(level1_entities)[:10]:  # Top 10 entities
+                entity_results = self.message_store.search_messages(
+                    query=entity,
+                    chat_ids=chat_ids,
+                    limit=5,  # Small limit
+                    time_range=time_limit
+                )
+                
+                for msg in entity_results:
+                    msg_id = msg.get("message_id")
+                    if msg_id and msg_id not in seen_ids and len(level1_messages) < max_total:
+                        msg["match_type"] = "level1_entity"
+                        msg["matched_term"] = entity
+                        level1_messages.append(msg)
+                        seen_ids.add(msg_id)
+            
+            logger.info(f"After level 1: {len(level1_messages)} messages")
+            
+            # LEVEL 2: Extract ONLY business-relevant entities from level 1 enriched messages
+            level2_entities = set()
+            
+            # Look for full company names that might be expansions of acronyms
+            # E.g., if we found "SM", look for "SecureMetric" in the expanded messages
+            acronym_expansions = {
+                'SM': ['SecureMetric', 'SecMetric'],
+                # More can be found dynamically
+            }
+            
+            for msg in level1_messages[len(initial_results):]:  # Only new messages
+                content = msg.get("content", "") or msg.get("text", "")
+                
+                # Look for country/city names with business context
+                business_locations = re.findall(r'\b([A-Z][a-z]{5,})\b(?=.*(?:office|market|client|customer))', content, re.DOTALL)
+                level2_entities.update(business_locations[:3])
+                
+                # Look for company names (2+ capitalized words) that appear near business terms
+                if re.search(r'\b(partner|client|customer|meeting|presentation)\b', content.lower()):
+                    companies = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b', content)
+                    level2_entities.update(companies[:2])
+            
+            # Add known acronym expansions
+            for acronym in level1_entities:
+                if acronym in acronym_expansions:
+                    level2_entities.update(acronym_expansions[acronym])
+            
+            logger.info(f"Level 2 entities (business-focused): {list(level2_entities)[:10]}")
+            
+            # Search for level 2 entities (smaller limit to avoid noise)
+            for entity in list(level2_entities)[:8]:  # Only top 8
+                entity_results = self.message_store.search_messages(
+                    query=entity,
+                    chat_ids=chat_ids,
+                    limit=3,  # Very small limit
+                    time_range=time_limit
+                )
+                
+                for msg in entity_results:
+                    msg_id = msg.get("message_id")
+                    if msg_id and msg_id not in seen_ids and len(level1_messages) < max_total:
+                        msg["match_type"] = "level2_entity"
+                        msg["matched_term"] = entity
+                        level1_messages.append(msg)
+                        seen_ids.add(msg_id)
+            
+            logger.info(f"After level 2: {len(level1_messages)} messages")
+            return level1_messages
+            
+        except Exception as e:
+            logger.warning(f"Error in two-level enrichment: {e}")
+            return initial_results
+    
+    async def _selective_enrichment(
+        self,
+        initial_results: List[Dict[str, Any]],
+        original_query: str,
+        chat_ids: Optional[List[int]],
+        time_limit: Optional[Tuple[datetime, datetime]],
+        max_total: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Selective enrichment - only search for SPECIFIC entities found in initial results
+        Avoids noise from generic terms
+        
+        Args:
+            initial_results: Initial search results
+            original_query: Original search query
+            chat_ids: Chat IDs to filter
+            time_limit: Time range limit
+            max_total: Maximum total messages to return
+            
+        Returns:
+            Enriched list of messages
+        """
+        try:
+            # Extract only SPECIFIC entities (short acronyms, products, company names)
+            # Do NOT extract generic terms like "meeting", "project"
+            entity_keywords = set()
+            
+            for msg in initial_results:
+                content = msg.get("content", "") or msg.get("text", "")
+                
+                # Short acronyms (2-4 uppercase letters) - usually important
+                acronyms = re.findall(r'\b([A-Z]{2,4})\b', content)
+                for ac in acronyms:
+                    # Skip very common ones
+                    if ac not in ['THE', 'AND', 'FOR', 'VRC', 'POC']:  # Keep VRC out to avoid noise
+                        entity_keywords.add(ac)
+                
+                # camelCase products
+                camel = re.findall(r'\b([a-z]+[A-Z][a-zA-Z]*)\b', content)
+                entity_keywords.update(camel)
+                
+                # Company names (2 capitalized words)
+                companies = re.findall(r'\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b', content)
+                entity_keywords.update(companies)
+            
+            logger.info(f"Selective enrichment with {len(entity_keywords)} entities: {list(entity_keywords)[:10]}")
+            
+            # Search for each entity
+            seen_ids = {msg.get("message_id") for msg in initial_results}
+            enriched_results = list(initial_results)
+            
+            for entity in list(entity_keywords)[:15]:  # Limit to top 15
+                entity_results = self.message_store.search_messages(
+                    query=entity,
+                    chat_ids=chat_ids,
+                    limit=10,  # Smaller limit per entity
+                    time_range=time_limit
+                )
+                
+                for msg in entity_results:
+                    msg_id = msg.get("message_id")
+                    if msg_id and msg_id not in seen_ids and len(enriched_results) < max_total:
+                        msg["match_type"] = "related_entity"
+                        msg["matched_term"] = entity
+                        enriched_results.append(msg)
+                        seen_ids.add(msg_id)
+            
+            logger.info(f"Selective enrichment: {len(initial_results)} → {len(enriched_results)} messages")
+            return enriched_results
+            
+        except Exception as e:
+            logger.warning(f"Error in selective enrichment: {e}")
+            return initial_results
+    
+    async def _enrich_with_related_messages(
+        self,
+        initial_results: List[Dict[str, Any]],
+        original_query: str,
+        chat_ids: Optional[List[int]],
+        time_limit: Optional[Tuple[datetime, datetime]],
+        max_total: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich search results by finding messages related to entities mentioned in initial results
+        
+        Uses LLM-based entity extraction to find relevant related discussions
+        
+        Args:
+            initial_results: Initial search results
+            original_query: Original search query
+            chat_ids: Chat IDs to filter
+            time_limit: Time range limit
+            max_total: Maximum total messages to return
+            
+        Returns:
+            Enriched list of messages
+        """
+        try:
+            # Extract entities using robust pattern matching
+            entity_keywords = set()
+            
+            # Pattern-based entity extraction (reliable and fast)
+            # Extract capitalized names, acronyms, and special terms
+            for msg in initial_results[:50]:  # Check first 50 messages for comprehensive entity extraction
+                content = msg.get("content", "") or msg.get("text", "")
+                
+                # Extract company/organization names (2+ capitalized words)
+                company_names = re.findall(r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b', content)
+                for name in company_names:
+                    if len(name) > 5 and name.lower() not in ['the new', 'the first']:
+                        entity_keywords.add(name)
+                        # Also add without spaces for acronyms (e.g., "Mai Linh" → search for "MaiLinh" too)
+                        compact = name.replace(' ', '')
+                        if len(compact) <= 15:
+                            entity_keywords.add(compact)
+                
+                # Extract acronyms (2+ uppercase letters) - includes SM, AI, etc.
+                acronyms = re.findall(r'\b([A-Z]{2,})\b', content)
+                for acronym in acronyms:
+                    # Filter out very common single letters used as list items
+                    if len(acronym) >= 2 or acronym in ['I', 'A']:
+                        entity_keywords.add(acronym)
+                
+                # Extract all capitalized words (company names like SecureMetric, Philippines)
+                cap_words = re.findall(r'\b([A-Z][a-zA-Z]{3,})\b', content)
+                for word in cap_words:
+                    if word not in ['Been', 'Therefore', 'Could', 'Should', 'Would', 'This', 'That', 'These', 'Those', 'There', 'Here', 'When', 'Where']:
+                        entity_keywords.add(word)
+                
+                # Extract camelCase/PascalCase (likely product names)
+                camel_case = re.findall(r'\b([a-z]+[A-Z][a-zA-Z]*)\b', content)
+                for term in camel_case:
+                    entity_keywords.add(term)
+            
+            # Extract business-related keywords dynamically from initial results
+            # Look for patterns that indicate important context
+            business_patterns = [
+                # Company/partner names (2+ words starting with capitals)
+                r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b',
+                # Locations/countries/cities
+                r'\b([A-Z][a-z]{3,})\b(?=\s+(?:office|market|region|country|city))',
+                # Technical terms and certifications
+                r'\b([A-Z]{3,})\b',  # 3+ letter acronyms like FIDO, eKYC
+                # Product/feature names
+                r'\b([a-z]+[A-Z][a-zA-Z]*)\b'  # camelCase like eKYC
+            ]
+            
+            # Also search for common business indicators (generic, not hardcoded)
+            business_indicators = [
+                'meeting', 'presentation', 'demo', 'poc', 'proof of concept',
+                'certification', 'partner', 'partnership', 'client', 'customer',
+                'project', 'initiative', 'roadmap', 'milestone',
+                'contract', 'agreement', 'collaboration', 'integration'
+            ]
+            
+            # Extract entities from initial messages
+            for msg in initial_results[:15]:  # Check top 15 messages for entities
+                content = msg.get("content", "") or msg.get("text", "")
+                
+                # Extract using patterns
+                for pattern in business_patterns:
+                    matches = re.findall(pattern, content)
+                    for match in matches:
+                        if len(match) > 2 and match.lower() not in ['the', 'and', 'for', 'with', 'from', 'that', 'this']:
+                            entity_keywords.add(match)
+            
+            # Add generic business indicators found in initial results
+            for msg in initial_results[:50]:
+                content = (msg.get("content", "") or msg.get("text", "")).lower()
+                for indicator in business_indicators:
+                    if indicator in content:
+                        entity_keywords.add(indicator)
+            
+            # Filter and prioritize entities intelligently
+            # Remove common words that aren't meaningful entities
+            stopwords = {
+                'Therefore', 'However', 'Context', 'Could', 'Should', 'Would', 'Another',
+                'Closely', 'Asked', 'Specific', 'Yesterday', 'Tomorrow', 'Friday', 'Monday',
+                'English', 'GMT', 'Congrats', 'Phone', 'Full', 'Save', 'Registration',
+                'Contact', 'Includes', 'Package', 'Please', 'Currently', 'Here'
+            }
+            entity_keywords = {e for e in entity_keywords if e not in stopwords and len(e) >= 2}
+            
+            logger.info(f"Extracted {len(entity_keywords)} filtered entities from patterns")
+            
+            # Simple prioritization: shorter terms first (acronyms, products) then longer
+            # Shorter terms are usually more important (SM, POC, eKYC vs "Marketing Department")
+            sorted_entities = sorted(entity_keywords, key=lambda x: (
+                len(x),  # Shorter first
+                not x.isupper(),  # Acronyms first
+                x.lower()  # Then alphabetically
+            ))
+            
+            # Always prioritize generic business indicators
+            business_indicator_set = {b.lower() for b in business_indicators}
+            priority_entities = [e for e in sorted_entities if e.lower() in business_indicator_set]
+            other_sorted = [e for e in sorted_entities if e.lower() not in business_indicator_set]
+            
+            # Final order: business indicators first, then other entities by length
+            priority_order = priority_entities + other_sorted
+            
+            logger.info(f"Priority entities (first 30): {priority_order[:30]}")
+            
+            # Perform additional searches for top entities
+            seen_ids = {msg.get("message_id") for msg in initial_results}
+            enriched_results = list(initial_results)
+            
+            # Increase max to allow more enrichment
+            enrichment_max = max_total + 100  # Allow 100 extra messages from enrichment for thorough coverage
+            
+            for entity in priority_order[:40]:  # Check top 40 entities for comprehensive coverage
+                if len(enriched_results) >= enrichment_max:
+                    break
+                
+                # Search for this entity
+                entity_results = self.message_store.search_messages(
+                    query=entity,
+                    chat_ids=chat_ids,
+                    limit=20,
+                    time_range=time_limit
+                )
+                
+                # Log all entity searches for debugging
+                logger.debug(f"Entity '{entity}' search found {len(entity_results)} messages")
+                
+                # Add new unique messages
+                added_count = 0
+                for msg in entity_results:
+                    msg_id = msg.get("message_id")
+                    if msg_id and msg_id not in seen_ids:
+                        msg["match_type"] = "related_entity"
+                        msg["matched_term"] = entity
+                        enriched_results.append(msg)
+                        seen_ids.add(msg_id)
+                        added_count += 1
+                        
+                        if len(enriched_results) >= enrichment_max:
+                            break
+                
+                if added_count > 0:
+                    logger.info(f"Added {added_count} messages from entity '{entity}'")
+            
+            logger.info(f"Enrichment complete: {len(initial_results)} → {len(enriched_results)} messages")
+            return enriched_results[:enrichment_max]
+            
+        except Exception as e:
+            logger.warning(f"Error enriching results: {e}")
+            return initial_results
 
     async def _collect_minimal_context(
         self, 
@@ -700,6 +1087,95 @@ Return your response as a JSON object with this structure:
                 "key_concepts": [],
                 "entity_type": "other"
             }
+    
+    async def semantic_search(
+        self,
+        query: str,
+        limit: int = 50,
+        similarity_threshold: float = 0.4,
+        exclude_ids: List[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform semantic search using embeddings
+        
+        Finds messages that are semantically similar to the query,
+        even if they don't share keywords. This solves the "Philippines" problem
+        where related discussions don't mention the main entity.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            similarity_threshold: Minimum cosine similarity (0-1)
+            exclude_ids: Message IDs to exclude from results
+            
+        Returns:
+            List of semantically similar messages with similarity scores
+        """
+        try:
+            # Lazy load embedding service
+            if self.embedding_service is None:
+                self.embedding_service = get_embedding_service()
+            
+            # Generate embedding for query
+            query_embedding = await self.embedding_service.embed(query)
+            
+            # Get all embeddings from database
+            all_embeddings = self.message_store.get_all_embeddings()
+            
+            if not all_embeddings:
+                logger.warning("No embeddings found in database - run generate_embeddings.py first")
+                return []
+            
+            # Calculate similarities
+            similarities = []
+            exclude_set = set(exclude_ids) if exclude_ids else set()
+            
+            for item in all_embeddings:
+                msg_id = item['message_id']
+                
+                # Skip excluded messages
+                if msg_id in exclude_set:
+                    continue
+                
+                # Convert bytes to numpy array
+                embedding_bytes = item['embedding']
+                msg_embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
+                
+                # Calculate cosine similarity
+                similarity = self.embedding_service.cosine_similarity(query_embedding, msg_embedding)
+                
+                # Only include if above threshold
+                if similarity >= similarity_threshold:
+                    similarities.append({
+                        'message_id': msg_id,
+                        'id': msg_id,
+                        'content': item['content'],
+                        'sender_name': item['sender_name'],
+                        'timestamp': item['timestamp'],
+                        'similarity_score': float(similarity),
+                        'search_method': 'semantic'
+                    })
+            
+            # Sort by similarity (highest first)
+            similarities.sort(key=lambda x: x['similarity_score'], reverse=True)
+            
+            # Return top N
+            results = similarities[:limit]
+            
+            logger.info(f"Semantic search found {len(results)} similar messages (threshold: {similarity_threshold})")
+            
+            if results:
+                top_scores = [f"{r['similarity_score']:.3f}" for r in results[:5]]
+                logger.debug(f"Top similarities: {top_scores}")
+            
+            return results
+            
+        except ImportError:
+            logger.warning("sentence-transformers not installed - semantic search disabled")
+            return []
+        except Exception as e:
+            logger.error(f"Semantic search error: {e}")
+            return []
 
 
 # Singleton instance

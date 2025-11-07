@@ -9,7 +9,8 @@ from pathlib import Path
 from loguru import logger
 import time
 from datetime import datetime
-from typing import List
+from typing import List, Optional
+import asyncio
 
 # Ensure we use the same data directory as the main app
 from silentgem.config import DATA_DIR, ensure_dir_exists
@@ -91,6 +92,23 @@ class MessageStore:
             cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_entity_text 
             ON message_entities(entity_text)
+            ''')
+            
+            # Create embeddings table for semantic search
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS message_embeddings (
+                id INTEGER PRIMARY KEY,
+                message_id INTEGER NOT NULL UNIQUE,
+                embedding BLOB NOT NULL,
+                embedding_model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2',
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (message_id) REFERENCES messages(id)
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_embedding_message_id 
+            ON message_embeddings(message_id)
             ''')
             
             self.conn.commit()
@@ -253,13 +271,16 @@ class MessageStore:
             
             # Add content search if query provided
             if query:
+                # Check if we have OR operators BEFORE lowercasing
+                has_or_operator = " OR " in query
+                
                 # Normalize the query - remove extra spaces and lowercase
                 query = ' '.join(query.split()).lower()
                 
                 # Check if we have OR operators in the query
-                if " OR " in query:
-                    # Split by OR and create a compound query
-                    terms = query.split(" OR ")
+                if has_or_operator or " or " in query:
+                    # Split by OR (case-insensitive) and create a compound query
+                    terms = query.split(" or ")
                     or_conditions = []
                     
                     for term in terms:
@@ -671,6 +692,260 @@ class MessageStore:
         except Exception as e:
             logger.error(f"Error getting messages in timespan: {e}")
             return []
+    
+    def store_embedding(self, message_id: int, embedding: bytes, model: str = "all-MiniLM-L6-v2"):
+        """
+        Store embedding vector for a message
+        
+        Args:
+            message_id: Database ID of the message (not Telegram message_id)
+            embedding: Embedding vector as bytes
+            model: Name of the embedding model used
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            cursor.execute('''
+            INSERT OR REPLACE INTO message_embeddings 
+            (message_id, embedding, embedding_model, created_at)
+            VALUES (?, ?, ?, ?)
+            ''', (message_id, embedding, model, int(time.time())))
+            
+            self.conn.commit()
+            logger.debug(f"Stored embedding for message ID {message_id}")
+            
+        except Exception as e:
+            logger.error(f"Error storing embedding: {e}")
+            raise
+    
+    def get_embedding(self, message_id: int) -> tuple:
+        """
+        Retrieve embedding for a message
+        
+        Args:
+            message_id: Database ID of the message
+            
+        Returns:
+            Tuple of (embedding_bytes, model_name) or (None, None) if not found
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            cursor.execute('''
+            SELECT embedding, embedding_model 
+            FROM message_embeddings 
+            WHERE message_id = ?
+            ''', (message_id,))
+            
+            result = cursor.fetchone()
+            
+            if result:
+                return result[0], result[1]
+            return None, None
+            
+        except Exception as e:
+            logger.error(f"Error retrieving embedding: {e}")
+            return None, None
+    
+    def get_all_embeddings(self, limit: int = None) -> list:
+        """
+        Get all message embeddings with their content
+        
+        Args:
+            limit: Maximum number of embeddings to retrieve (optional)
+            
+        Returns:
+            List of dicts with message_id, content, embedding
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            query = '''
+            SELECT m.id, m.content, m.sender_name, m.timestamp, e.embedding, e.embedding_model
+            FROM messages m
+            INNER JOIN message_embeddings e ON m.id = e.message_id
+            WHERE m.is_media = 0
+            ORDER BY m.timestamp DESC
+            '''
+            
+            if limit:
+                query += f' LIMIT {limit}'
+            
+            cursor.execute(query)
+            
+            results = []
+            for row in cursor.fetchall():
+                results.append({
+                    'message_id': row[0],
+                    'content': row[1],
+                    'sender_name': row[2],
+                    'timestamp': row[3],
+                    'embedding': row[4],
+                    'embedding_model': row[5]
+                })
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error getting all embeddings: {e}")
+            return []
+    
+    def count_embeddings(self) -> int:
+        """
+        Count how many messages have embeddings
+        
+        Returns:
+            Count of messages with embeddings
+        """
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM message_embeddings')
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Error counting embeddings: {e}")
+            return 0
+    
+    def get_messages_without_embeddings(self, limit: int = 100) -> list:
+        """
+        Get messages that don't have embeddings yet
+        
+        Args:
+            limit: Maximum number of messages to return
+            
+        Returns:
+            List of message dicts
+        """
+        try:
+            cursor = self.conn.cursor()
+            
+            cursor.execute('''
+            SELECT m.id, m.content, m.sender_name, m.timestamp,
+                   m.source_chat_id, m.target_chat_id
+            FROM messages m
+            LEFT JOIN message_embeddings e ON m.id = e.message_id
+            WHERE e.message_id IS NULL 
+            AND m.is_media = 0
+            AND m.content IS NOT NULL
+            AND LENGTH(m.content) > 10
+            ORDER BY m.timestamp DESC
+            LIMIT ?
+            ''', (limit,))
+            
+            columns = [col[0] for col in cursor.description]
+            messages = [dict(zip(columns, row)) for row in cursor.fetchall()]
+            
+            return messages
+            
+        except Exception as e:
+            logger.error(f"Error getting messages without embeddings: {e}")
+            return []
+    
+    async def generate_embedding_for_message(self, message_db_id: int, content: str) -> bool:
+        """
+        Generate and store embedding for a single message (async, non-blocking)
+        
+        Args:
+            message_db_id: Database ID of the message
+            content: Message content to embed
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Skip very short messages
+            if not content or len(content.strip()) < 10:
+                logger.debug(f"Skipping embedding for message {message_db_id} - content too short")
+                return False
+            
+            # Lazy import to avoid circular dependency
+            from silentgem.embeddings.embedding_service import get_embedding_service
+            import numpy as np
+            
+            # Get embedding service
+            embedding_service = get_embedding_service()
+            
+            # Generate embedding (async)
+            embedding = await embedding_service.embed(content)
+            
+            # Convert to bytes for storage
+            embedding_bytes = embedding.astype(np.float32).tobytes()
+            
+            # Store in database
+            self.store_embedding(message_db_id, embedding_bytes)
+            
+            logger.debug(f"Generated embedding for message {message_db_id}")
+            return True
+            
+        except ImportError:
+            logger.warning("sentence-transformers not installed - skipping embedding generation")
+            return False
+        except Exception as e:
+            logger.warning(f"Error generating embedding for message {message_db_id}: {e}")
+            return False
+    
+    async def process_embedding_backlog(self, batch_size: int = 50, max_messages: int = None) -> int:
+        """
+        Process messages without embeddings in batches (for background processing)
+        
+        Args:
+            batch_size: Number of messages to process at once
+            max_messages: Maximum total messages to process (None = all)
+            
+        Returns:
+            int: Number of embeddings generated
+        """
+        try:
+            # Lazy import
+            from silentgem.embeddings.embedding_service import get_embedding_service
+            import numpy as np
+            
+            embedding_service = get_embedding_service()
+            processed_count = 0
+            
+            while True:
+                # Get next batch of messages without embeddings
+                messages = self.get_messages_without_embeddings(limit=batch_size)
+                
+                if not messages:
+                    logger.info("No more messages to process")
+                    break
+                
+                # Stop if we've reached max_messages
+                if max_messages and processed_count >= max_messages:
+                    logger.info(f"Reached maximum of {max_messages} messages")
+                    break
+                
+                # Extract content for batch processing
+                contents = [msg['content'] for msg in messages]
+                message_ids = [msg['id'] for msg in messages]
+                
+                logger.info(f"Processing batch of {len(messages)} messages...")
+                
+                # Generate embeddings in batch (faster)
+                embeddings = await embedding_service.embed(contents)
+                
+                # Store each embedding
+                for msg_id, embedding in zip(message_ids, embeddings):
+                    embedding_bytes = embedding.astype(np.float32).tobytes()
+                    self.store_embedding(msg_id, embedding_bytes)
+                    processed_count += 1
+                
+                logger.info(f"Processed {processed_count} embeddings so far...")
+                
+                # If we got fewer messages than batch_size, we're done
+                if len(messages) < batch_size:
+                    break
+            
+            logger.info(f"Completed processing {processed_count} embeddings")
+            return processed_count
+            
+        except ImportError:
+            logger.warning("sentence-transformers not installed - cannot process embeddings")
+            return 0
+        except Exception as e:
+            logger.error(f"Error processing embedding backlog: {e}")
+            return processed_count
 
 
 # Create a singleton instance

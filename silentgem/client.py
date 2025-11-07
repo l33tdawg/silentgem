@@ -54,7 +54,33 @@ class SilentGemClient:
         # For tracking running state
         self._running = False
         
+        # Track embedding generation tasks
+        self._embedding_tasks = set()
+        
         logger.info("SilentGem client initialized")
+    
+    def _schedule_embedding_generation(self, message_db_id: int, content: str):
+        """
+        Schedule embedding generation as a background task (non-blocking)
+        
+        Args:
+            message_db_id: Database ID of the message
+            content: Message content to embed
+        """
+        async def _generate_embedding():
+            """Async wrapper for embedding generation"""
+            try:
+                message_store = get_message_store()
+                await message_store.generate_embedding_for_message(message_db_id, content)
+            except Exception as e:
+                logger.debug(f"Error generating embedding: {e}")
+            finally:
+                # Remove from tracking set when done
+                self._embedding_tasks.discard(task)
+        
+        # Create task and add to tracking set
+        task = asyncio.create_task(_generate_embedding())
+        self._embedding_tasks.add(task)
     
     async def start(self):
         """Start the client and register handlers"""
@@ -320,8 +346,8 @@ class SilentGemClient:
                                     if insights_config.get("anonymize_senders", False):
                                         display_sender = "Anonymous"
                                         
-                                    # Store the message
-                                    message_store.store_message(
+                                    # Store the message (media messages won't get embeddings)
+                                    message_db_id = message_store.store_message(
                                         message_id=sent_message.id if sent_message else 0,
                                         original_message_id=message.id,
                                         source_chat_id=chat_id,
@@ -337,6 +363,7 @@ class SilentGemClient:
                                         is_forwarded=message.forward_date is not None
                                     )
                                     print(f"📝 Stored media message in database for chat insights")
+                                    # No embedding generation for media messages
                             except Exception as store_error:
                                 logger.error(f"Error storing message in database: {store_error}")
                                 print(f"❌ Could not store message: {store_error}")
@@ -423,8 +450,8 @@ class SilentGemClient:
                                     if insights_config.get("anonymize_senders", False):
                                         display_sender = "Anonymous"
                                         
-                                    # Store the message
-                                    message_store.store_message(
+                                    # Store the message (media messages won't get embeddings)
+                                    message_db_id = message_store.store_message(
                                         message_id=sent_message.id if sent_message else 0,
                                         original_message_id=message.id,
                                         source_chat_id=chat_id,
@@ -440,6 +467,7 @@ class SilentGemClient:
                                         is_forwarded=message.forward_date is not None
                                     )
                                     print(f"📝 Stored media message in database for chat insights")
+                                    # No embedding generation for media messages
                             except Exception as store_error:
                                 logger.error(f"Error storing message in database: {store_error}")
                                 print(f"❌ Could not store message: {store_error}")
@@ -532,7 +560,7 @@ class SilentGemClient:
                                     display_sender = "Anonymous"
                                     
                                 # Store the message
-                                message_store.store_message(
+                                message_db_id = message_store.store_message(
                                     message_id=sent_message.id if sent_message else 0,
                                     original_message_id=message.id,
                                     source_chat_id=chat_id,
@@ -548,6 +576,10 @@ class SilentGemClient:
                                     is_forwarded=message.forward_date is not None
                                 )
                                 print(f"📝 Stored message in database for chat insights")
+                                
+                                # Generate embedding in background (non-blocking)
+                                if message_db_id and text and media_type is None:
+                                    self._schedule_embedding_generation(message_db_id, text)
                         except Exception as store_error:
                             logger.error(f"Error storing message in database: {store_error}")
                             print(f"❌ Could not store message: {store_error}")
@@ -641,7 +673,7 @@ class SilentGemClient:
                                     display_sender = "Anonymous"
                                     
                                 # Store the message
-                                message_store.store_message(
+                                message_db_id = message_store.store_message(
                                     message_id=sent_message.id if sent_message else 0,
                                     original_message_id=message.id,
                                     source_chat_id=chat_id,
@@ -657,6 +689,10 @@ class SilentGemClient:
                                     is_forwarded=message.forward_date is not None
                                 )
                                 print(f"📝 Stored message in database for chat insights")
+                                
+                                # Generate embedding in background (non-blocking)
+                                if message_db_id and translated_text and media_type is None:
+                                    self._schedule_embedding_generation(message_db_id, translated_text)
                         except Exception as store_error:
                             logger.error(f"Error storing message in database: {store_error}")
                             print(f"❌ Could not store message: {store_error}")
