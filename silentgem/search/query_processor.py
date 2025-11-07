@@ -226,19 +226,22 @@ class QueryProcessor:
 
 Guidelines:
 - processed_query: Extract the MAIN ENTITY or TOPIC being asked about. For "what is X doing/working on?", use just "X"
-- expanded_terms: For queries about "what is X doing/working on?", include variations of X name and common associated terms (products, partners, projects, etc.). Keep it broad to capture all related discussions.
+- expanded_terms: For queries about "what is X doing/working on?", include ONLY close variations of X name (e.g., different capitalizations, common abbreviations). DO NOT add generic terms like "products", "partners", "projects" - keep it very focused on the entity name.
 - time_period: Extract if mentioned, otherwise null
 - sender: Only if asking about specific person
 - intent: Determine the user's goal
 
 Examples:
-Query: "what is TrueID team working on?"
-Response: {"processed_query": "trueid", "expanded_terms": ["TrueID", "trueID"], "time_period": null, "sender": null, "intent": "search"}
+Query: "what is TeamAlpha working on?"
+Response: {"processed_query": "TeamAlpha", "expanded_terms": ["teamalpha", "team alpha"], "time_period": null, "sender": null, "intent": "search"}
 
-Query: "what happened with SecureMetric yesterday?"
-Response: {"processed_query": "securemetric", "expanded_terms": ["SecureMetric", "SM"], "time_period": "yesterday", "sender": null, "intent": "search"}
+Query: "what happened with CompanyX yesterday?"
+Response: {"processed_query": "CompanyX", "expanded_terms": ["CX"], "time_period": "yesterday", "sender": null, "intent": "search"}
 
-NOTE: For multi-word entity names, use case variations WITHOUT spaces to avoid false matches (e.g., "TrueID" and "trueID", not "true id").
+Query: "what is john working on?"
+Response: {"processed_query": "john", "expanded_terms": ["John"], "time_period": null, "sender": "john", "intent": "search"}
+
+IMPORTANT: Keep expanded_terms MINIMAL - only exact name variations. Do NOT add related concepts, products, or generic terms.
 
 Return ONLY the JSON object, no other text."""
             
@@ -325,21 +328,24 @@ Return ONLY the JSON object, no other text."""
                     else:
                         final_result["alternative_phrasings"] = alt_phrasings
                 
-                # Create expanded query if we have expanded terms
+                # Create expanded query if we have expanded terms - but limit to avoid over-matching
                 if final_result.get("expanded_terms"):
                     expanded_query_parts = [final_result["query_text"]]
                     
-                    # Add expanded terms
-                    for term in final_result["expanded_terms"]:
+                    # Add expanded terms but limit to 2 additional terms max
+                    for term in final_result["expanded_terms"][:2]:  # Limit to 2 additional terms
                         if term and term not in expanded_query_parts:
-                            expanded_query_parts.append(str(term))
+                            term_str = str(term)
+                            # Only add if it's a close variation (not too different from original)
+                            if len(term_str) > 1:  # Skip single character terms
+                                expanded_query_parts.append(term_str)
                     
-                    # Create OR query
-                    if len(expanded_query_parts) > 1:
+                    # Create OR query only if we have reasonable expansions
+                    if len(expanded_query_parts) > 1 and len(expanded_query_parts) <= 3:  # Max 3 terms total
                         # Ensure all parts are strings before joining
                         expanded_query_parts = [str(part) for part in expanded_query_parts if part is not None]
                         final_result["query_text"] = " OR ".join(expanded_query_parts)
-                        logger.info(f"Expanded query: {final_result['query_text']}")
+                        logger.debug(f"Expanded query: {final_result['query_text']}")
                 
                 return final_result
                 
@@ -598,15 +604,17 @@ Return ONLY the JSON object, no other text."""
                     expanded_terms = list(set(expanded_terms))  # Remove duplicates
                     final_result["expanded_terms"] = expanded_terms
                     
-                    # Use the enhanced query for searching if configured
+                    # Use the enhanced query for searching if configured - but be conservative
                     use_expanded_query = self.config.get("use_expanded_query", True)
                     if use_expanded_query and expanded_terms:
-                        # Create OR query combining original and expanded terms
-                        all_terms = [processed_query] + expanded_terms
+                        # Create OR query combining original and expanded terms (limit to 2 additional)
+                        all_terms = [processed_query] + expanded_terms[:2]  # Limit expansion
                         # Ensure all terms are strings before joining
-                        all_terms = [str(term) for term in all_terms if term is not None]
-                        final_result["query_text"] = " OR ".join(all_terms)
-                        logger.info(f"Enhanced search query: {final_result['query_text']}")
+                        all_terms = [str(term) for term in all_terms if term is not None and len(str(term)) > 1]
+                        # Only expand if we have 3 or fewer terms total
+                        if len(all_terms) <= 3:
+                            final_result["query_text"] = " OR ".join(all_terms)
+                            logger.info(f"Enhanced search query: {final_result['query_text']}")
             else:
                 # No processed query found, use original
                 final_result["query_text"] = query_text

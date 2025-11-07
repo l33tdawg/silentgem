@@ -143,7 +143,7 @@ class GuidedQueryGenerator:
 ✅ "What was the conversion rate for the Spring New Product Launch Event?"
 ✅ "When is the Q2 Work Plan scheduled to begin?"
 ✅ "What templates were prepared for government agencies?"
-✅ "Who is Phuong Verichains developing the Business Plan for?"
+✅ "Who is [team member] developing the Business Plan for?"
 
 **Golden Rule**: Ask about WHAT people are discussing (content), not WHERE they're discussing it (channels).
 
@@ -282,9 +282,9 @@ If response mentions "Spring New Product Launch Event attracted 500 customers":
 ✅ "What was the conversion rate for the Spring New Product Launch Event?"
 ✅ "When did the Spring New Product Launch Event take place?"
 
-If response mentions "Business Plan is being developed by Phuong Verichains":
-✅ "What is the timeline for Phuong Verichains' Business Plan?"
-✅ "Who else is working with Phuong Verichains on the Business Plan?"
+If response mentions "Business Plan is being developed by [team member]":
+✅ "What is the timeline for the Business Plan?"
+✅ "Who else is working on the Business Plan?"
 
 If response mentions "Q2 Work Plan includes new initiatives":
 ✅ "What specific initiatives are in the Q2 Work Plan?"

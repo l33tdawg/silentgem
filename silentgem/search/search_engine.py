@@ -34,7 +34,7 @@ class SearchEngine:
         self.fast_mode = True  # Skip expensive LLM expansions
         self.max_semantic_terms = 3  # Limit semantic expansion
         self.enable_context_collection = False  # Skip context collection for speed
-        self.use_semantic_search = True  # Enable semantic search by default
+        self.use_semantic_search = True  # Enable semantic search (optimized)
     
     async def search(self, search_params: QueryParams) -> List[Dict[str, Any]]:
         """
@@ -68,19 +68,26 @@ class SearchEngine:
             parsed_query={"processed_query": query, "time_period": search_params.time_period}
         )
         
-        # SEMANTIC ENRICHMENT: Add semantically similar messages
-        if self.use_semantic_search and len(results) < 100:
-            semantic_results = await self.semantic_search(
-                query=query,
-                limit=50,
-                similarity_threshold=0.2,  # Lower threshold to catch related context
-                exclude_ids=[msg.get('message_id') or msg.get('id') for msg in results]
-            )
-            
-            if semantic_results:
-                logger.info(f"Adding {len(semantic_results)} semantically similar messages")
-                # Merge results (keyword results first, then semantic)
-                results.extend(semantic_results)
+        # SEMANTIC ENRICHMENT: Add semantically similar messages (only if keyword search found few results)
+        if self.use_semantic_search and len(results) < 10:  # Only use semantic search when we have very few results
+            try:
+                semantic_results = await self.semantic_search(
+                    query=query,
+                    limit=15,  # Limit semantic results
+                    similarity_threshold=0.55,  # Much higher threshold for better relevance
+                    exclude_ids=[msg.get('message_id') or msg.get('id') for msg in results]
+                )
+                
+                if semantic_results:
+                    logger.info(f"Adding {len(semantic_results)} semantically similar messages (threshold: 0.55)")
+                    # Mark semantic results clearly
+                    for sem_msg in semantic_results:
+                        sem_msg["match_type"] = "semantic"
+                        sem_msg["search_method"] = "semantic"
+                    # Merge results (keyword results first, then semantic)
+                    results.extend(semantic_results)
+            except Exception as e:
+                logger.warning(f"Semantic search failed: {e}, continuing with keyword results")
         
         return results
 
@@ -211,10 +218,10 @@ class SearchEngine:
         seen_ids = set()
         unique_results = []
         
-        # Simple sort by match type priority and timestamp
+        # Enhanced sort by match type priority with stronger weights for direct matches
         def result_sort_key(msg):
-            match_type_priority = {"direct": 0, "or_term": 1, "semantic": 2, "fuzzy": 3}
-            priority = match_type_priority.get(msg.get("match_type", "semantic"), 4)
+            match_type_priority = {"direct": 0, "or_term": 1, "semantic": 3, "fuzzy": 4}  # Bigger gap between keyword and semantic
+            priority = match_type_priority.get(msg.get("match_type", "semantic"), 5)
             timestamp = msg.get("timestamp", 0)
             return (priority, -timestamp)
         
@@ -244,7 +251,7 @@ class SearchEngine:
         if parsed_query:
             metadata["parsed_query"] = parsed_query
         
-        logger.info(f"Search for '{query}' found {len(final_results)} messages in {execution_time:.2f}s")
+        logger.debug(f"Search for '{query}' found {len(final_results)} messages in {execution_time:.2f}s")
         return final_results, metadata
 
     async def _get_cached_expansion(self, query: str) -> List[str]:
@@ -313,8 +320,8 @@ class SearchEngine:
     ) -> List[Dict[str, Any]]:
         """
         Two-level enrichment to capture indirectly related messages
-        Level 1: Extract entities from initial results (e.g., SM, eKYC from TrueID messages)
-        Level 2: Search for those entities to find related context (e.g., Philippines from SM messages)
+        Level 1: Extract entities from initial results (e.g., acronyms, products from company messages)
+        Level 2: Search for those entities to find related context (e.g., locations from company messages)
         
         Args:
             initial_results: Initial search results
@@ -371,10 +378,10 @@ class SearchEngine:
             level2_entities = set()
             
             # Look for full company names that might be expansions of acronyms
-            # E.g., if we found "SM", look for "SecureMetric" in the expanded messages
+            # E.g., if we found "CX", look for "CompanyX" in the expanded messages
             acronym_expansions = {
-                'SM': ['SecureMetric', 'SecMetric'],
-                # More can be found dynamically
+                # Dynamically discovered acronym expansions would go here
+                # Example: 'CX': ['CompanyX', 'CompX']
             }
             
             for msg in level1_messages[len(initial_results):]:  # Only new messages
@@ -531,19 +538,19 @@ class SearchEngine:
                 for name in company_names:
                     if len(name) > 5 and name.lower() not in ['the new', 'the first']:
                         entity_keywords.add(name)
-                        # Also add without spaces for acronyms (e.g., "Mai Linh" → search for "MaiLinh" too)
+                        # Also add without spaces for acronyms (e.g., "Company Name" → search for "CompanyName" too)
                         compact = name.replace(' ', '')
                         if len(compact) <= 15:
                             entity_keywords.add(compact)
                 
-                # Extract acronyms (2+ uppercase letters) - includes SM, AI, etc.
+                # Extract acronyms (2+ uppercase letters) - includes company abbreviations, AI, etc.
                 acronyms = re.findall(r'\b([A-Z]{2,})\b', content)
                 for acronym in acronyms:
                     # Filter out very common single letters used as list items
                     if len(acronym) >= 2 or acronym in ['I', 'A']:
                         entity_keywords.add(acronym)
                 
-                # Extract all capitalized words (company names like SecureMetric, Philippines)
+                # Extract all capitalized words (company names, locations, proper nouns)
                 cap_words = re.findall(r'\b([A-Z][a-zA-Z]{3,})\b', content)
                 for word in cap_words:
                     if word not in ['Been', 'Therefore', 'Could', 'Should', 'Would', 'This', 'That', 'These', 'Those', 'There', 'Here', 'When', 'Where']:
@@ -606,7 +613,7 @@ class SearchEngine:
             logger.info(f"Extracted {len(entity_keywords)} filtered entities from patterns")
             
             # Simple prioritization: shorter terms first (acronyms, products) then longer
-            # Shorter terms are usually more important (SM, POC, eKYC vs "Marketing Department")
+            # Shorter terms are usually more important (acronyms, product codes vs "Marketing Department")
             sorted_entities = sorted(entity_keywords, key=lambda x: (
                 len(x),  # Shorter first
                 not x.isupper(),  # Acronyms first
@@ -839,7 +846,7 @@ Return your response as a JSON object with this structure:
                             unique_terms.append(term)
                 
                 logger.debug(f"Expanded query '{query}' to {len(unique_terms)} terms: {unique_terms}")
-                logger.info(f"Expanded query: {' OR '.join(unique_terms)}")
+                logger.debug(f"Expanded query: {' OR '.join(unique_terms)}")
                 return unique_terms
                 
             except Exception as e:
@@ -1092,15 +1099,14 @@ Return your response as a JSON object with this structure:
         self,
         query: str,
         limit: int = 50,
-        similarity_threshold: float = 0.4,
+        similarity_threshold: float = 0.55,
         exclude_ids: List[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Perform semantic search using embeddings
+        Perform semantic search using embeddings (optimized with vectorized operations)
         
         Finds messages that are semantically similar to the query,
-        even if they don't share keywords. This solves the "Philippines" problem
-        where related discussions don't mention the main entity.
+        even if they don't share keywords.
         
         Args:
             query: Search query
@@ -1123,12 +1129,16 @@ Return your response as a JSON object with this structure:
             all_embeddings = self.message_store.get_all_embeddings()
             
             if not all_embeddings:
-                logger.warning("No embeddings found in database - run generate_embeddings.py first")
+                logger.debug("No embeddings found in database - run generate_embeddings.py first")
                 return []
             
-            # Calculate similarities
-            similarities = []
+            # Build exclude set for fast lookup
             exclude_set = set(exclude_ids) if exclude_ids else set()
+            
+            # Vectorized computation: prepare all embeddings as matrix
+            msg_ids = []
+            msg_data = []
+            embedding_matrix = []
             
             for item in all_embeddings:
                 msg_id = item['message_id']
@@ -1137,36 +1147,62 @@ Return your response as a JSON object with this structure:
                 if msg_id in exclude_set:
                     continue
                 
+                msg_ids.append(msg_id)
+                msg_data.append(item)
+                
                 # Convert bytes to numpy array
                 embedding_bytes = item['embedding']
                 msg_embedding = np.frombuffer(embedding_bytes, dtype=np.float32)
-                
-                # Calculate cosine similarity
-                similarity = self.embedding_service.cosine_similarity(query_embedding, msg_embedding)
-                
-                # Only include if above threshold
-                if similarity >= similarity_threshold:
-                    similarities.append({
-                        'message_id': msg_id,
-                        'id': msg_id,
-                        'content': item['content'],
-                        'sender_name': item['sender_name'],
-                        'timestamp': item['timestamp'],
-                        'similarity_score': float(similarity),
-                        'search_method': 'semantic'
-                    })
+                embedding_matrix.append(msg_embedding)
             
-            # Sort by similarity (highest first)
-            similarities.sort(key=lambda x: x['similarity_score'], reverse=True)
+            if not embedding_matrix:
+                return []
             
-            # Return top N
-            results = similarities[:limit]
+            # Convert to numpy array for vectorized operations
+            embedding_matrix = np.array(embedding_matrix)
             
-            logger.info(f"Semantic search found {len(results)} similar messages (threshold: {similarity_threshold})")
+            # Vectorized cosine similarity computation (MUCH faster!)
+            # Normalize query embedding
+            query_norm = np.linalg.norm(query_embedding)
+            if query_norm == 0:
+                return []
+            query_normalized = query_embedding / query_norm
             
-            if results:
-                top_scores = [f"{r['similarity_score']:.3f}" for r in results[:5]]
-                logger.debug(f"Top similarities: {top_scores}")
+            # Normalize all message embeddings
+            embedding_norms = np.linalg.norm(embedding_matrix, axis=1, keepdims=True)
+            embedding_norms[embedding_norms == 0] = 1  # Avoid division by zero
+            embeddings_normalized = embedding_matrix / embedding_norms
+            
+            # Compute all similarities at once (dot product)
+            similarities = np.dot(embeddings_normalized, query_normalized)
+            
+            # Filter by threshold and get top results
+            above_threshold = similarities >= similarity_threshold
+            valid_indices = np.where(above_threshold)[0]
+            
+            if len(valid_indices) == 0:
+                return []
+            
+            # Get top K indices by similarity
+            valid_similarities = similarities[valid_indices]
+            sorted_indices = np.argsort(-valid_similarities)[:limit]  # Descending order
+            
+            # Build results
+            results = []
+            for idx in sorted_indices:
+                original_idx = valid_indices[idx]
+                item = msg_data[original_idx]
+                results.append({
+                    'message_id': msg_ids[original_idx],
+                    'id': msg_ids[original_idx],
+                    'content': item['content'],
+                    'sender_name': item['sender_name'],
+                    'timestamp': item['timestamp'],
+                    'similarity_score': float(similarities[original_idx]),
+                    'search_method': 'semantic'
+                })
+            
+            logger.debug(f"Semantic search found {len(results)} similar messages (threshold: {similarity_threshold})")
             
             return results
             

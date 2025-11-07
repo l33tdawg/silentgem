@@ -68,7 +68,7 @@ class CommandHandler:
         # Performance settings
         self.enable_caching = True
         self.enable_parallel_processing = True
-        self.fast_mode = False  # Enable full LLM processing for better responses
+        self.fast_mode = False  # Keep LLM processing enabled for intelligent responses
     
     def _get_conversation_intelligence(self):
         """Get conversation intelligence instance (lazy initialization)"""
@@ -217,7 +217,7 @@ class CommandHandler:
                             
                             # Log the follow-up detection
                             if is_followup:
-                                logger.info(f"Detected follow-up question. Current: '{query}', Previous: '{previous_query}'")
+                                logger.debug(f"Detected follow-up question. Current: '{query}', Previous: '{previous_query}'")
                             else:
                                 logger.debug(f"Not a follow-up. Current: '{query}', Previous: '{previous_query}'")
                 except Exception as e:
@@ -761,7 +761,7 @@ class CommandHandler:
         
         # If there's significant keyword overlap, it's likely related
         if len(overlap) >= 1:
-            logger.info(f"Found keyword overlap: {overlap}")
+            logger.debug(f"Found keyword overlap: {overlap}")
             return True
         
         # Check for similar business/company context

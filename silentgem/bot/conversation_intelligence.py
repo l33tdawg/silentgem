@@ -260,7 +260,7 @@ Return your analysis as a JSON object with these fields:
 **MANDATORY SYNTHESIS PROTOCOL**:
 
 BEFORE writing your response, scan ALL messages for:
-□ Acronyms (2-4 capital letters like SM, FIDO, POC) - these are often partners/products
+□ Acronyms (2-4 capital letters like FIDO, POC) - these are often partners/products
 □ camelCase terms (like eKYC) - these are usually product names
 □ Company/partner names mentioned with "client", "partner", "customer", "booked"
 □ Certifications, standards, or compliance mentions
@@ -268,7 +268,7 @@ BEFORE writing your response, scan ALL messages for:
 □ Scheduled events, meetings, or presentations
 
 THEN write your response including ALL found elements:
-- If you find "SM" with "client/booked", report it as a partner engagement
+- If you find an acronym with "client/booked", report it as a partner engagement
 - If you find "FIDO" with "certification/cert", report the certification work
 - If you find "eKYC" or camelCase products, report the product work
 - If acronyms appear, try to infer full names from context
@@ -279,11 +279,11 @@ DO NOT write a vague response if specific entities are present. Every acronym, e
 "I'd be happy to help you understand how X works. Based on the messages, it appears that..."
 
 **Example GOOD Response**:
-"The review direction section focuses on app-based scams and VRC's advisory role in Bshield's handling method. @quangtuanvrc has already sent an official letter to Satra introducing VRC's products, services, and capabilities.
+"The review direction section focuses on app-based scams and the company's advisory role in the security product's handling method. Team members have sent official letters to clients introducing the company's products, services, and capabilities.
 
-The proposal being drafted for Satra involves reviewing the direction section with @quangtuanvrc's assistance. Templates have been prepared for government agencies, and @ninapham229 will assist Satra with the PoC presentation. 
+The proposal being drafted for ClientX involves reviewing the direction section with team assistance. Templates have been prepared for government agencies, and team members will assist with the PoC presentation. 
 
-This emphasis on security and risk management aligns with Bshield's overall mission to provide a secure and reliable platform for transactions. The team is actively working on Bshield-related tasks, including setting up online meetings to discuss progress regarding the BShield evaluation report and planning with new customers."
+This emphasis on security and risk management aligns with the product's overall mission to provide a secure and reliable platform for transactions. The team is actively working on security-related tasks, including setting up online meetings to discuss progress regarding evaluation reports and planning with new customers."
 
 """
         

@@ -11,6 +11,6 @@ pytest==7.4.3
 pytest-asyncio==0.21.1
 pytest-mock==3.12.0
 pytest-cov==4.1.0
-sentence-transformers==2.2.2
-numpy==1.24.3
-faiss-cpu==1.7.4 
+numpy>=1.26.0
+sentence-transformers>=3.0.0
+faiss-cpu>=1.8.0 
