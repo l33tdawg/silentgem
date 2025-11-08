@@ -1069,23 +1069,23 @@ async def interactive_add_mapping_menu():
 async def start_service(service=True, silent=False, load_from=None, monitoring_mode=False, return_to_menu=True):
     """
     Start the translation service with improved signal handling.
-    
+
     Args:
         service: Whether this is being run in service mode
         silent: Whether to suppress output
         load_from: Optional path to load configuration from
         monitoring_mode: Whether to run in monitoring mode
         return_to_menu: Whether to return to the menu when done
-        
+
     Returns:
         menu_return_requested: Boolean indicating if a return to menu was requested
     """
     # Declare all globals at the beginning to avoid syntax errors
     global menu_return_requested, force_shutdown_requested, shutdown_in_progress, shutdown_timer
-    
+
     # Initialize variables to prevent scope issues
     shutdown_timer = None
-    
+
     # Reset states at the start of a new session
     menu_return_requested = False
     force_shutdown_requested = False
@@ -1127,9 +1127,9 @@ async def start_service(service=True, silent=False, load_from=None, monitoring_m
     # Create a simpler signal handler that uses a direct approach
     def custom_signal_handler(sig, frame):
         print("\n🛑 Interrupt received. Shutting down service...")
-        
+
         # We can access these variables directly since they're declared global at the function level
-        global shutdown_timer
+        global shutdown_timer, shutdown_in_progress, menu_return_requested, force_shutdown_requested
         
         # Set the signal handler flag
         signal_handler.shutdown_requested = True
