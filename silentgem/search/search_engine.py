@@ -214,16 +214,35 @@ class SearchEngine:
                     msg["matched_term"] = query
                     results.append(msg)
 
-        # Deduplicate and sort results
+        # Deduplicate and sort results with recency boost
         seen_ids = set()
         unique_results = []
         
-        # Enhanced sort by match type priority with stronger weights for direct matches
+        # Enhanced sort by match type priority with stronger weights for direct matches + recency boost
         def result_sort_key(msg):
             match_type_priority = {"direct": 0, "or_term": 1, "semantic": 3, "fuzzy": 4}  # Bigger gap between keyword and semantic
             priority = match_type_priority.get(msg.get("match_type", "semantic"), 5)
             timestamp = msg.get("timestamp", 0)
-            return (priority, -timestamp)
+            
+            # Add recency boost: messages from last 30 days get priority boost
+            current_time = time.time()
+            days_old = (current_time - timestamp) / 86400 if timestamp else 999
+            
+            # Recency tiers:
+            # - Last 7 days: boost by 0.5 priority levels
+            # - Last 14 days: boost by 0.3 priority levels  
+            # - Last 30 days: boost by 0.1 priority levels
+            recency_boost = 0
+            if days_old <= 7:
+                recency_boost = -0.5
+            elif days_old <= 14:
+                recency_boost = -0.3
+            elif days_old <= 30:
+                recency_boost = -0.1
+            
+            adjusted_priority = priority + recency_boost
+            
+            return (adjusted_priority, -timestamp)
         
         for msg in sorted(results, key=result_sort_key):
             if msg["message_id"] not in seen_ids:

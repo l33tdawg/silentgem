@@ -356,6 +356,11 @@ class MessageStore:
                     week_ago = current_time - (7 * 86400)
                     sql += " AND timestamp >= ?"
                     params.append(week_ago)
+                elif time_period == "two_weeks":
+                    # Get timestamp for 14 days ago
+                    two_weeks_ago = current_time - (14 * 86400)
+                    sql += " AND timestamp >= ?"
+                    params.append(two_weeks_ago)
                 elif time_period == "month":
                     # Get timestamp for 30 days ago
                     month_ago = current_time - (30 * 86400)

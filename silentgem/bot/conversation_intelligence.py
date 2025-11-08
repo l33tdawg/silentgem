@@ -175,11 +175,11 @@ Return your analysis as a JSON object with these fields:
             if estimated_tokens > self.available_context_tokens:
                 user_prompt = self._trim_context_for_tokens(user_prompt, self.available_context_tokens - len(system_prompt) // 4)
             
-            # Generate response with higher token limit and lower temperature for consistent comprehensive synthesis
+            # Generate response with optimized settings for speed and quality
             response = await self.llm_client.chat_completion([
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ], temperature=0.1, max_tokens=2000)  # Lower temp = more deterministic, comprehensive
+            ], temperature=0.05, max_tokens=1500)  # Very low temp = faster, more deterministic; 1500 tokens sufficient
             
             if response and response.get("content"):
                 return response["content"]
@@ -295,6 +295,12 @@ THEN write your response including ALL found elements:
 - If acronyms appear, try to infer full names from context
 
 DO NOT write a vague response if specific entities are present. Every acronym, every product name, every partner reference MUST be included.
+
+**RECENCY PRIORITY**:
+- Messages are sorted by relevance AND recency (newer messages appear first)
+- For "what's going on" queries, prioritize recent developments over historical context
+- Focus on the most recent mentions and scheduled future events
+- If older context is relevant, mention it briefly but emphasize recent activity
 
 **Example BAD Response**:
 "I'd be happy to help you understand how X works. Based on the messages, it appears that..."

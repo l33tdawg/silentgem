@@ -60,6 +60,11 @@ class QueryParams:
             start = now - timedelta(days=7)
             return (start, now)
             
+        elif self.time_period == "two_weeks":
+            # Last 14 days
+            start = now - timedelta(days=14)
+            return (start, now)
+            
         elif self.time_period == "month":
             # Last 30 days
             start = now - timedelta(days=30)

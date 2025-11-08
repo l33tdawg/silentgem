@@ -184,19 +184,35 @@ class QueryProcessor:
                 result["time_period"] = period
                 break
         
-        # Check for recent events queries
+        # Check for recent events queries - with stronger patterns and default to 2 weeks
         if not result["time_period"]:
-            recent_event_patterns = [
-                r'\b(recent|latest|new|current|ongoing|happening now|breaking|updates|events)\b',
-                r'\b(what.?s new|what.?s happening|what.?s going on)\b',
-                r'\b(news|developments|situation|update me)\b'
+            # "What's going on" type queries should focus on recent activity
+            status_update_patterns = [
+                r'\b(what.?s\s+(going\s+on|happening|up)|going\s+on\s+with)\b',
+                r'\b(status|update|latest|recent|current|new)\s+(on|with|about|for)\b',
             ]
             
-            for pattern in recent_event_patterns:
+            # General recent activity patterns
+            recent_event_patterns = [
+                r'\b(recent|latest|new|current|ongoing|happening now|breaking|updates|events)\b',
+                r'\b(what.?s new|news|developments|situation|update me)\b'
+            ]
+            
+            # Check status/activity patterns first (highest priority for recency)
+            for pattern in status_update_patterns:
                 if re.search(pattern, query_text, re.IGNORECASE):
-                    # Default to past week for recent events queries
-                    result["time_period"] = "week"
+                    # Default to past 2 weeks for "what's going on" type queries
+                    result["time_period"] = "two_weeks"
+                    logger.info(f"Detected status query pattern, defaulting to 2 weeks time period")
                     break
+            
+            # If not matched yet, check general recent event patterns
+            if not result["time_period"]:
+                for pattern in recent_event_patterns:
+                    if re.search(pattern, query_text, re.IGNORECASE):
+                        # Default to past week for general recent events
+                        result["time_period"] = "week"
+                        break
         
         return result
     
@@ -217,13 +233,13 @@ class QueryProcessor:
                 logger.warning("No LLM client available for advanced query processing")
                 return None
             
-            # Configure based on depth
+            # Configure based on depth - reduced tokens and temperature for speed
             if depth == "detailed":
-                max_tokens = 400
-                temp = 0.3
+                max_tokens = 300  # Reduced from 400
+                temp = 0.2  # Lower temp = faster, more deterministic
             else:
-                max_tokens = 250
-                temp = 0.4
+                max_tokens = 200  # Reduced from 250
+                temp = 0.2  # Lower temp = faster
             
             # Build system prompt
             system_prompt = """You are a query analysis assistant. Analyze the user's query and return a JSON object with the following structure:
@@ -255,7 +271,7 @@ Response: {"processed_query": "john", "expanded_terms": ["John"], "time_period":
 
 IMPORTANT: Keep expanded_terms MINIMAL - only exact name variations. Do NOT add related concepts, products, or generic terms.
 
-Return ONLY the JSON object, no other text."""
+CRITICAL FOR SPEED: Be concise! Return ONLY the JSON object with minimal expanded_terms (max 2-3 terms). No explanations, no extra text."""
             
             # Process with LLM
             response = await llm_client.chat_completion([
