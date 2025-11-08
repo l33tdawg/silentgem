@@ -124,7 +124,7 @@ class LLMClient:
             Dictionary with completion response or None on failure
         """
         if not self._client:
-            logger.warning("LLM client not initialized. Please set up your Gemini API key or Ollama instance.")
+            logger.warning(f"LLM client not initialized. Client type: {self._client_type}. Please set up your Gemini API key or Ollama instance.")
             return None
             
         try:
@@ -223,7 +223,8 @@ class LLMClient:
             return None
                 
         except Exception as e:
-            logger.error(f"Error in chat completion: {e}")
+            logger.error(f"Error in chat completion with {self._client_type} client: {e}")
+            logger.debug(f"Error details: {type(e).__name__}: {str(e)}")
             return None
     
     async def complete(self, 
@@ -264,9 +265,15 @@ class LLMClient:
         )
         
         if response and "content" in response:
-            return response["content"]
-            
-        return None
+            content = response["content"]
+            if content:
+                return content
+            else:
+                logger.warning("LLM returned empty content in response")
+                return None
+        else:
+            logger.warning(f"LLM response missing 'content' field or is None. Response: {response}")
+            return None
 
 # Singleton instance
 _instance = None

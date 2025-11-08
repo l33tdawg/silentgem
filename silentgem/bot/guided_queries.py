@@ -147,16 +147,30 @@ class GuidedQueryGenerator:
 
 **Golden Rule**: Ask about WHAT people are discussing (content), not WHERE they're discussing it (channels).
 
-Always respond with valid JSON following the exact schema provided."""
+**CRITICAL OUTPUT REQUIREMENT**: 
+Respond with ONLY valid JSON. Do NOT include any explanatory text, comments, or notes before or after the JSON.
+Your entire response must be a single JSON object, nothing else."""
         
         try:
             # Call LLM to generate suggestions
+            logger.debug("Calling LLM for guided query generation...")
             llm_response = await self.llm_client.complete(
                 prompt=context_prompt,
                 system=system_prompt,
                 temperature=0.7,
                 max_tokens=1000
             )
+            
+            # Check if LLM response is valid
+            if llm_response is None:
+                logger.warning("LLM returned None, falling back to rule-based generation")
+                return self._generate_fallback(search_metadata)
+            
+            logger.debug(f"LLM response received (length: {len(llm_response) if llm_response else 0})")
+            
+            # Log first 500 chars for debugging
+            if llm_response:
+                logger.debug(f"LLM response preview: {llm_response[:500]}")
             
             # Parse LLM response
             suggestions_data = self._parse_llm_response(llm_response)
@@ -166,6 +180,7 @@ Always respond with valid JSON following the exact schema provided."""
             
         except Exception as e:
             logger.error(f"LLM generation failed: {e}")
+            logger.debug(f"Falling back to rule-based generation due to: {type(e).__name__}")
             return self._generate_fallback(search_metadata)
     
     def _build_llm_prompt(
@@ -337,17 +352,60 @@ If response mentions "Q2 Work Plan includes new initiatives":
         
         return '\n'.join(formatted)
     
-    def _parse_llm_response(self, llm_response: str) -> Dict[str, Any]:
+    def _parse_llm_response(self, llm_response: Optional[str]) -> Dict[str, Any]:
         """Parse and validate LLM JSON response"""
         try:
+            # Check if response is None or empty
+            if llm_response is None:
+                logger.error("LLM returned None response")
+                raise ValueError("LLM response is None")
+            
+            if not llm_response or not llm_response.strip():
+                logger.error("LLM returned empty response")
+                raise ValueError("LLM response is empty")
+            
             # Try to extract JSON from response (in case LLM adds extra text)
             json_match = llm_response.strip()
+            
+            # Find the first complete JSON object by counting braces
             if not json_match.startswith('{'):
-                # Try to find JSON block
-                start = llm_response.find('{')
-                end = llm_response.rfind('}') + 1
-                if start >= 0 and end > start:
-                    json_match = llm_response[start:end]
+                start_pos = llm_response.find('{')
+                if start_pos < 0:
+                    logger.error(f"No JSON object found in LLM response")
+                    logger.debug(f"LLM response was: {llm_response[:500]}")
+                    raise ValueError("No JSON object found in response")
+                json_match = llm_response[start_pos:]
+            
+            # Extract first complete JSON object by tracking brace depth
+            brace_count = 0
+            in_string = False
+            escape_next = False
+            end_pos = -1
+            
+            for i, char in enumerate(json_match):
+                if escape_next:
+                    escape_next = False
+                    continue
+                    
+                if char == '\\':
+                    escape_next = True
+                    continue
+                    
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                
+                if not in_string:
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            end_pos = i + 1
+                            break
+            
+            if end_pos > 0:
+                json_match = json_match[:end_pos]
             
             data = json.loads(json_match)
             
@@ -365,7 +423,10 @@ If response mentions "Q2 Work Plan includes new initiatives":
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
-            logger.debug(f"LLM response was: {llm_response}")
+            logger.debug(f"LLM response was: {llm_response[:500] if llm_response else 'None'}")
+            raise
+        except ValueError as e:
+            logger.error(f"Invalid LLM response: {e}")
             raise
     
     def _convert_to_suggestions(
