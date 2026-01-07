@@ -563,25 +563,44 @@ async def interactive_add_mapping(source_chats, target_channels, app=None):
     
     all_source_chats = source_chats.copy()
     
-    # Ask for source chat
-    print("\nSelect a source chat to monitor (enter the number):")
-    source_choice = input("> ").strip()
-    
     try:
-        source_idx = int(source_choice) - 1
-        if source_idx < 0 or source_idx >= len(all_source_chats):
-            print("❌ Invalid selection.")
+        # Build choices for source chat selection
+        source_choices = []
+        for i, chat in enumerate(all_source_chats):
+            chat_type = chat.get("type", "chat")
+            username = f" (@{chat['username']})" if chat.get("username") else ""
+            source_choices.append(Choice(f"[{chat_type}] {chat['title']}{username}", value=i))
+        source_choices.append(Choice("❌ Cancel", value=-1))
+        
+        # Ask for source chat using questionary
+        source_idx = await questionary.select(
+            "Select a source chat to monitor:",
+            choices=source_choices,
+            style=custom_style
+        ).ask_async()
+        
+        if source_idx is None or source_idx == -1:
+            print("Operation cancelled.")
             return False
         
         source_chat = all_source_chats[source_idx]
         
         # Present options for target: use existing channel or create new one
         print(f"\nSelected source: {source_chat['title']}")
-        print("\nHow would you like to set up the target channel?")
-        print("1. Use an existing channel")
-        print("2. Create a new channel automatically")
         
-        target_option = input("> ").strip()
+        target_option = await questionary.select(
+            "How would you like to set up the target channel?",
+            choices=[
+                Choice("📺 Use an existing channel", value="1"),
+                Choice("✨ Create a new channel automatically", value="2"),
+                Choice("❌ Cancel", value="cancel")
+            ],
+            style=custom_style
+        ).ask_async()
+        
+        if target_option is None or target_option == "cancel":
+            print("Operation cancelled.")
+            return False
         
         if target_option == "1":
             # Use existing channel
@@ -589,24 +608,25 @@ async def interactive_add_mapping(source_chats, target_channels, app=None):
                 print("\n❌ No existing channels found.")
                 print("Select option 2 to create a new channel.")
                 return False
-                
-            print("\nSelect a target channel for translations (enter the number):")
-            for i, channel in enumerate(target_channels, 1):
-                username = f" (@{channel['username']})" if channel["username"] else ""
-                print(f"{i}. {channel['title']}{username} (ID: {channel['id']})")
-                
-            target_choice = input("> ").strip()
             
-            try:
-                target_idx = int(target_choice) - 1
-                if target_idx < 0 or target_idx >= len(target_channels):
-                    print("❌ Invalid selection.")
-                    return False
-                
-                target_channel = target_channels[target_idx]
-            except ValueError:
-                print("❌ Invalid input. Please enter a number.")
+            # Build choices for target channel selection
+            target_choices = []
+            for i, channel in enumerate(target_channels):
+                username = f" (@{channel['username']})" if channel.get("username") else ""
+                target_choices.append(Choice(f"{channel['title']}{username}", value=i))
+            target_choices.append(Choice("❌ Cancel", value=-1))
+            
+            target_idx = await questionary.select(
+                "Select a target channel for translations:",
+                choices=target_choices,
+                style=custom_style
+            ).ask_async()
+            
+            if target_idx is None or target_idx == -1:
+                print("Operation cancelled.")
                 return False
+            
+            target_channel = target_channels[target_idx]
         
         elif target_option == "2":
             # Create new channel
@@ -631,9 +651,6 @@ async def interactive_add_mapping(source_chats, target_channels, app=None):
         print(f"\n✅ Added mapping: {source_chat['title']} -> {target_channel['title']}")
         return True
         
-    except ValueError:
-        print("❌ Invalid input. Please enter a number.")
-        return False
     except Exception as e:
         print(f"❌ Error adding mapping: {e}")
         return False
@@ -744,53 +761,61 @@ async def interactive_remove_mapping():
             print("No mappings could be resolved.")
             return
         
-        # Ask for selection
-        print("\nSelect a mapping to remove (enter the number):")
-        choice = input("> ").strip()
+        # Build choices for questionary select
+        choices = []
+        for i, (src_id, tgt_id, src_name, tgt_name) in enumerate(mapping_list, 1):
+            choices.append(Choice(f"{i}. {src_name} -> {tgt_name}", value=i-1))
+        choices.append(Choice("❌ Cancel", value=-1))
         
-        try:
-            selection = int(choice) - 1
-            if selection < 0 or selection >= len(mapping_list):
-                print("❌ Invalid selection.")
-                return
+        # Ask for selection using questionary
+        selection = await questionary.select(
+            "Select a mapping to remove:",
+            choices=choices,
+            style=custom_style
+        ).ask_async()
+        
+        if selection is None or selection == -1:
+            print("Operation cancelled.")
+            return
+        
+        source_id, target_id, source_name, target_name = mapping_list[selection]
+        
+        # Ask for confirmation using questionary
+        confirm = await questionary.confirm(
+            f"Remove mapping: {source_name} -> {target_name}?",
+            default=False,
+            style=custom_style
+        ).ask_async()
+        
+        if not confirm:
+            print("Operation cancelled.")
+            return
+        
+        # Remove the mapping
+        result = mapper.remove(source_id)
+        
+        if result:
+            print(f"✅ Removed mapping for {source_name}")
             
-            source_id, target_id, source_name, target_name = mapping_list[selection]
+            # Ask if the user wants to delete the target channel using questionary
+            delete_choice = await questionary.confirm(
+                f"Would you like to delete the target channel '{target_name}'?",
+                default=False,
+                style=custom_style
+            ).ask_async()
             
-            # Ask for confirmation
-            print(f"\nRemove mapping: {source_name} -> {target_name}? (y/n)")
-            confirm = input("> ").strip().lower()
-            
-            if confirm != 'y':
-                print("Operation cancelled.")
-                return
-            
-            # Remove the mapping
-            result = mapper.remove(source_id)
-            
-            if result:
-                print(f"✅ Removed mapping for {source_name}")
-                
-                # Ask if the user wants to delete the target channel
-                print(f"\nWould you like to delete the target channel '{target_name}'? (y/n)")
-                delete_choice = input("> ").strip().lower()
-                
-                if delete_choice == 'y':
-                    # Attempt to delete the channel if it was auto-created
-                    # Pass the existing client to avoid creating a new one
-                    deleted = await delete_channel_if_auto_created(target_id, app)
-                    if not deleted:
-                        print(f"The channel was not deleted automatically as it wasn't auto-created by SilentGem.")
-                        print(f"You can delete it manually from the Telegram app if needed.")
-                else:
-                    print(f"Target channel '{target_name}' has been kept.")
-                    
+            if delete_choice:
+                # Attempt to delete the channel if it was auto-created
+                # Pass the existing client to avoid creating a new one
+                deleted = await delete_channel_if_auto_created(target_id, app)
+                if not deleted:
+                    print(f"The channel was not deleted automatically as it wasn't auto-created by SilentGem.")
+                    print(f"You can delete it manually from the Telegram app if needed.")
             else:
-                print(f"❌ Failed to remove mapping for {source_name}")
-            
-        except ValueError:
-            print("❌ Invalid input. Please enter a number.")
-        except Exception as e:
-            print(f"❌ Error removing mapping: {e}")
+                print(f"Target channel '{target_name}' has been kept.")
+                
+        else:
+            print(f"❌ Failed to remove mapping for {source_name}")
             
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
@@ -1026,17 +1051,23 @@ async def list_available_chats():
         
         # Ask if user wants to add a mapping
         if available_chats:
-            print("\nWould you like to add a new chat mapping? (y/n)")
-            choice = input("> ").strip().lower()
+            add_mapping = await questionary.confirm(
+                "Would you like to add a new chat mapping?",
+                default=False,
+                style=custom_style
+            ).ask_async()
             
-            if choice == 'y':
+            if add_mapping:
                 await interactive_add_mapping(available_chats, available_channels, app)
                 return True
         else:
-            print("\nWould you like to add a mapping manually using chat IDs? (y/n)")
-            choice = input("> ").strip().lower()
+            add_manual = await questionary.confirm(
+                "Would you like to add a mapping manually using chat IDs?",
+                default=False,
+                style=custom_style
+            ).ask_async()
             
-            if choice == 'y':
+            if add_manual:
                 await interactive_add_mapping_menu()
                 return True
         
@@ -1059,10 +1090,25 @@ async def list_available_chats():
 async def interactive_add_mapping_menu():
     """Add a mapping by entering IDs directly"""
     try:
-        source_id = input("Enter source chat ID: ").strip()
-        target_id = input("Enter target channel ID: ").strip()
+        source_id = await questionary.text(
+            "Enter source chat ID:",
+            style=custom_style
+        ).ask_async()
         
-        await add_mapping(source_id, target_id)
+        if not source_id:
+            print("Operation cancelled.")
+            return
+        
+        target_id = await questionary.text(
+            "Enter target channel ID:",
+            style=custom_style
+        ).ask_async()
+        
+        if not target_id:
+            print("Operation cancelled.")
+            return
+        
+        await add_mapping(source_id.strip(), target_id.strip())
     except Exception as e:
         print(f"❌ Error adding mapping: {e}")
 
@@ -1389,10 +1435,19 @@ async def main():
             print("No session files found to clean up.")
             return
         
-        print("\nCleanup options:")
-        print("1. Full cleanup (backup and remove all session files - requires re-authentication)")
-        print("2. Fix locks only (preserve authentication data, only remove lock files)")
-        choice = input("\nEnter your choice (1/2): ").strip()
+        choice = await questionary.select(
+            "Select cleanup option:",
+            choices=[
+                Choice("🗑️  Full cleanup (backup and remove all session files - requires re-authentication)", value="1"),
+                Choice("🔧 Fix locks only (preserve authentication data, only remove lock files)", value="2"),
+                Choice("❌ Cancel", value="cancel")
+            ],
+            style=custom_style
+        ).ask_async()
+        
+        if choice is None or choice == "cancel":
+            print("Cleanup cancelled.")
+            return
         
         if choice == "1":
             # Create backup directory
